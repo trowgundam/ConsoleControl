@@ -34,22 +34,37 @@
   </Window.Styles>
 
   <Grid RowDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto" Margin="24" RowSpacing="12">
-    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-      <TextBlock Text="Video source" VerticalAlignment="Center" />
-      <ComboBox Grid.Column="1"
-                ItemsSource="{Binding VideoSources}"
-                SelectedItem="{Binding SelectedVideoSource, Mode=TwoWay}">
-        <ComboBox.ItemTemplate>
-          <DataTemplate x:DataType="core:VideoSource">
-            <TextBlock Text="{Binding DisplayName}" />
-          </DataTemplate>
-        </ComboBox.ItemTemplate>
-      </ComboBox>
-      <TextBlock Grid.Column="2"
-                 Text="{Binding VideoStatusText}"
-                 VerticalAlignment="Center"
-                 Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
-    </Grid>
+    <StackPanel Grid.Row="0" Spacing="8">
+      <Grid ColumnDefinitions="130,*" ColumnSpacing="12">
+        <TextBlock Text="Controller bridge" VerticalAlignment="Center" />
+        <ComboBox Grid.Column="1"
+                  IsEnabled="{Binding !HasControl}"
+                  ItemsSource="{Binding ControllerBridges}"
+                  SelectedItem="{Binding SelectedControllerBridge, Mode=TwoWay}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="core:ControllerBridge">
+              <TextBlock Text="{Binding DisplayName}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+      </Grid>
+      <Grid ColumnDefinitions="130,*,Auto" ColumnSpacing="12">
+        <TextBlock Text="Video source" VerticalAlignment="Center" />
+        <ComboBox Grid.Column="1"
+                  ItemsSource="{Binding VideoSources}"
+                  SelectedItem="{Binding SelectedVideoSource, Mode=TwoWay}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="core:VideoSource">
+              <TextBlock Text="{Binding DisplayName}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+        <TextBlock Grid.Column="2"
+                   Text="{Binding VideoStatusText}"
+                   VerticalAlignment="Center"
+                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
+      </Grid>
+    </StackPanel>
 
     <Border Grid.Row="1"
             Background="Black"

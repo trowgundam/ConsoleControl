@@ -11,6 +11,8 @@ service ConsoleControlService {
   rpc SaveInputProfile (SaveInputProfileRequest) returns (InputConfigurationReply);
   rpc GetVideoInventory (GetVideoInventoryRequest) returns (VideoInventoryReply);
   rpc SelectVideoSource (SelectVideoSourceRequest) returns (VideoSelectionReply);
+  rpc GetControllerBridgeInventory (GetControllerBridgeInventoryRequest) returns (ControllerBridgeInventoryReply);
+  rpc SelectControllerBridge (SelectControllerBridgeRequest) returns (ControllerBridgeSelectionReply);
   rpc GetScreenshot (GetScreenshotRequest) returns (ScreenshotReply);
   rpc RunAutomation (RunAutomationRequest) returns (AutomationResultReply);
   rpc DeclineControlRequest (DeclineControlRequestMessage) returns (DeclineControlRequestReply);
@@ -112,14 +114,102 @@ message VideoSelectionReply {
   string status = 3;
 }
 
-message GetStatusRequest {}
+message GetControllerBridgeInventoryRequest {}
+
+message ControllerBridgeMessage {
+  string id = 1;
+  string display_name = 2;
+  bool connected = 3;
+}
+
+message ControllerBridgeInventoryReply {
+  repeated ControllerBridgeMessage bridges = 1;
+  optional string selected_bridge_id = 2;
+  uint64 revision = 3;
+  ControllerBridgeStateMessage state = 4;
+  string status = 5;
+}
+
+message SelectControllerBridgeRequest {
+  string bridge_id = 1;
+  uint64 expected_revision = 2;
+}
+
+message ControllerBridgeSelectionReply {
+  string bridge_id = 1;
+  uint64 revision = 2;
+  ControllerBridgeStateMessage state = 3;
+  string status = 4;
+}
+
+enum ControllerBridgeStateMessage {
+  CONTROLLER_BRIDGE_STATE_MESSAGE_UNSPECIFIED = 0;
+  CONTROLLER_BRIDGE_STATE_MESSAGE_SELECTION_REQUIRED = 1;
+  CONTROLLER_BRIDGE_STATE_MESSAGE_UNAVAILABLE = 2;
+  CONTROLLER_BRIDGE_STATE_MESSAGE_DISCONNECTED = 3;
+  CONTROLLER_BRIDGE_STATE_MESSAGE_READY = 4;
+  CONTROLLER_BRIDGE_STATE_MESSAGE_FAULTED = 5;
+}
+
+message GetStatusRequest { string client_id = 1; }
 
 message GetStatusReply {
-  bool bridge_connected = 1;
-  bool control_available = 2;
-  string detail = 3;
-  optional string pending_control_request_id = 4;
-  optional string pending_control_request_reason = 5;
+  string daemon_version = 1;
+  uint32 protocol_version = 2;
+  ControlOwnerMessage control_owner = 3;
+  ControllerBridgeStatusMessage controller_bridge = 4;
+  VideoCaptureStatusMessage video = 5;
+  optional string pending_control_request_id = 6;
+  optional string pending_control_request_reason = 7;
+}
+
+enum ControlOwnerMessage {
+  CONTROL_OWNER_MESSAGE_UNSPECIFIED = 0;
+  CONTROL_OWNER_MESSAGE_NONE = 1;
+  CONTROL_OWNER_MESSAGE_THIS_CLIENT = 2;
+  CONTROL_OWNER_MESSAGE_INTERACTIVE_CLIENT = 3;
+  CONTROL_OWNER_MESSAGE_AUTOMATION_CLIENT = 4;
+}
+
+enum HardwareAvailabilityMessage {
+  HARDWARE_AVAILABILITY_MESSAGE_UNSPECIFIED = 0;
+  HARDWARE_AVAILABILITY_MESSAGE_UNKNOWN = 1;
+  HARDWARE_AVAILABILITY_MESSAGE_AVAILABLE = 2;
+  HARDWARE_AVAILABILITY_MESSAGE_UNAVAILABLE = 3;
+}
+
+enum ControllerOutputConnectionMessage {
+  CONTROLLER_OUTPUT_CONNECTION_MESSAGE_UNSPECIFIED = 0;
+  CONTROLLER_OUTPUT_CONNECTION_MESSAGE_NOT_CONFIGURED = 1;
+  CONTROLLER_OUTPUT_CONNECTION_MESSAGE_DISCONNECTED_UNTIL_INPUT = 2;
+  CONTROLLER_OUTPUT_CONNECTION_MESSAGE_CONNECTED = 3;
+  CONTROLLER_OUTPUT_CONNECTION_MESSAGE_FAULTED = 4;
+}
+
+message ControllerBridgeStatusMessage {
+  optional string selected_bridge_id = 1;
+  HardwareAvailabilityMessage availability = 2;
+  ControllerOutputConnectionMessage output_connection = 3;
+  string detail = 4;
+  optional int64 last_inventory_at_unix_ms = 5;
+}
+
+enum VideoCaptureStateMessage {
+  VIDEO_CAPTURE_STATE_MESSAGE_UNSPECIFIED = 0;
+  VIDEO_CAPTURE_STATE_MESSAGE_SELECTION_REQUIRED = 1;
+  VIDEO_CAPTURE_STATE_MESSAGE_STARTING = 2;
+  VIDEO_CAPTURE_STATE_MESSAGE_STREAMING = 3;
+  VIDEO_CAPTURE_STATE_MESSAGE_RECONNECTING = 4;
+  VIDEO_CAPTURE_STATE_MESSAGE_FAULTED = 5;
+}
+
+message VideoCaptureStatusMessage {
+  optional string selected_source_id = 1;
+  HardwareAvailabilityMessage availability = 2;
+  VideoCaptureStateMessage capture_state = 3;
+  optional VideoModeMessage active_mode = 4;
+  optional int64 latest_frame_at_unix_ms = 5;
+  string detail = 6;
 }
 
 message OpenControlStream {

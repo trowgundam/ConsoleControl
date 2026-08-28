@@ -9,6 +9,11 @@ using ConsoleControl.Video.FFmpeg;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 
 DaemonOptions options = DaemonOptions.Parse(args);
+if (options.ShowHelp)
+{
+    Console.WriteLine(DaemonOptions.Usage);
+    return;
+}
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 builder.Logging.AddFilter("Grpc.AspNetCore.Server.ServerCallHandler", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
@@ -22,7 +27,9 @@ builder.WebHost.ConfigureKestrel(kestrel =>
 });
 builder.Services.AddGrpc();
 
-BluezControllerOutput controllerOutput = new(options.Adapter, options.BridgeAddress);
+BluezControllerOutput controllerAdapter = new(options.Adapter);
+ControllerBridgeRuntime controllerOutput = new(controllerAdapter, new ControllerBridgeSelectionStore());
+builder.Services.AddSingleton(controllerOutput);
 builder.Services.AddSingleton<IControllerOutput>(controllerOutput);
 builder.Services.AddSingleton<ConsoleRuntime>();
 builder.Services.AddSingleton<InputProfileStore>();
@@ -65,4 +72,5 @@ app.MapGet("/video/live.mjpeg", async (HttpContext context, VideoRuntime video) 
 });
 app.MapGet("/", () => "ConsoleControl daemon requires a gRPC client.");
 await app.Services.GetRequiredService<VideoRuntime>().InitializeAsync(CancellationToken.None);
+await controllerOutput.InitializeAsync(CancellationToken.None);
 await app.RunAsync();

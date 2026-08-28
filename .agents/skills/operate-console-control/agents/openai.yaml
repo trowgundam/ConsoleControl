@@ -1,0 +1,3 @@
+interface:
+  display_name: "Operate Console Control"
+  short_description: "Operate ConsoleControl hardware and MCP tools"

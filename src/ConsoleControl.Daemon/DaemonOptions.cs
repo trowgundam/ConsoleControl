@@ -2,14 +2,30 @@ using System.Net;
 
 namespace ConsoleControl.Daemon;
 
-internal sealed record DaemonOptions(int Port, int VideoPort, string Adapter, string BridgeAddress)
+internal sealed record DaemonOptions(int Port, int VideoPort, string Adapter, bool ShowHelp)
 {
+    public const string Usage = """
+        ConsoleControl daemon
+
+        Usage:
+          ConsoleControl.Daemon [options]
+
+        Options:
+          --listen <uri>        gRPC loopback address (default: http://127.0.0.1:5041)
+          --video-listen <uri>  MJPEG loopback address (default: http://127.0.0.1:5042)
+          --adapter <name>      BlueZ adapter used to find controller bridges (default: hci0)
+          -h, --help            Show this help
+        """;
+
     public static DaemonOptions Parse(string[] args)
     {
         Uri listen = new("http://127.0.0.1:5041");
         Uri videoListen = new("http://127.0.0.1:5042");
         string adapter = "hci0";
-        string bridge = "F6:D5:24:56:6F:E2";
+        if (args is ["-h"] or ["--help"])
+        {
+            return new(listen.Port, videoListen.Port, adapter, true);
+        }
 
         for (int index = 0; index < args.Length; index += 2)
         {
@@ -28,9 +44,6 @@ internal sealed record DaemonOptions(int Port, int VideoPort, string Adapter, st
                     break;
                 case "--video-listen":
                     videoListen = new Uri(args[index + 1], UriKind.Absolute);
-                    break;
-                case "--bridge":
-                    bridge = args[index + 1];
                     break;
                 default:
                     throw new ArgumentException($"Unknown option '{args[index]}'.");
@@ -56,6 +69,6 @@ internal sealed record DaemonOptions(int Port, int VideoPort, string Adapter, st
             throw new ArgumentException("--video-listen must be a distinct HTTP loopback URI with a port and no path.");
         }
 
-        return new DaemonOptions(listen.Port, videoListen.Port, adapter, bridge);
+        return new DaemonOptions(listen.Port, videoListen.Port, adapter, false);
     }
 }

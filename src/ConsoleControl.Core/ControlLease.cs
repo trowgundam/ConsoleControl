@@ -10,6 +10,14 @@ public enum ControlPriority
     InteractiveUser,
 }
 
+public enum ControlOwner
+{
+    None,
+    ThisClient,
+    InteractiveClient,
+    AutomationClient,
+}
+
 public sealed record ControlLease(
     ClientId Owner,
     LeaseGeneration Generation,

@@ -3,9 +3,11 @@ using ConsoleControl.Core;
 namespace ConsoleControl.Client;
 
 public sealed record ConsoleStatus(
-    bool BridgeConnected,
-    bool ControlAvailable,
-    string Detail,
+    string DaemonVersion,
+    uint ProtocolVersion,
+    ControlOwner ControlOwner,
+    ControllerBridgeStatus ControllerBridge,
+    VideoCaptureStatus Video,
     PendingControlRequest? PendingControlRequest);
 
 public sealed record PendingControlRequest(Guid Id, string Reason);
@@ -22,6 +24,14 @@ public interface IConsoleSession : IAsyncDisposable
         CancellationToken cancellationToken);
 
     Task<VideoInventory> GetVideoInventoryAsync(CancellationToken cancellationToken);
+
+    Task<ControllerBridgeInventory> GetControllerBridgeInventoryAsync(
+        CancellationToken cancellationToken);
+
+    Task<ControllerBridgeSelection> SelectControllerBridgeAsync(
+        ControllerBridgeId bridgeId,
+        ulong expectedRevision,
+        CancellationToken cancellationToken);
 
     Task<VideoSelection> SelectVideoSourceAsync(
         VideoSourceId sourceId,

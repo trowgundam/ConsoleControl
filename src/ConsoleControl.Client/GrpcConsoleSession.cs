@@ -46,14 +46,27 @@ public sealed class GrpcConsoleSession : IConsoleSession
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         GetStatusReply reply = await _client.GetStatusAsync(
-            new GetStatusRequest(),
+            new GetStatusRequest { ClientId = _clientId.Value.ToString("D") },
             cancellationToken: cancellationToken);
         PendingControlRequest? pending = reply.HasPendingControlRequestId &&
                                          reply.HasPendingControlRequestReason &&
                                          Guid.TryParse(reply.PendingControlRequestId, out Guid requestId)
             ? new(requestId, reply.PendingControlRequestReason)
             : null;
-        return new ConsoleStatus(reply.BridgeConnected, reply.ControlAvailable, reply.Detail, pending);
+        return new ConsoleStatus(
+            reply.DaemonVersion,
+            reply.ProtocolVersion,
+            reply.ControlOwner switch
+            {
+                ControlOwnerMessage.None => ControlOwner.None,
+                ControlOwnerMessage.ThisClient => ControlOwner.ThisClient,
+                ControlOwnerMessage.InteractiveClient => ControlOwner.InteractiveClient,
+                ControlOwnerMessage.AutomationClient => ControlOwner.AutomationClient,
+                _ => throw new InvalidOperationException("The daemon returned an unknown control owner."),
+            },
+            ParseBridgeStatus(reply.ControllerBridge),
+            ParseVideoStatus(reply.Video),
+            pending);
     }
 
     public async Task<InputConfiguration> GetInputConfigurationAsync(
@@ -90,6 +103,40 @@ public sealed class GrpcConsoleSession : IConsoleSession
             new GetVideoInventoryRequest(),
             cancellationToken: cancellationToken);
         return ParseVideoInventory(reply);
+    }
+
+    public async Task<ControllerBridgeInventory> GetControllerBridgeInventoryAsync(
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ControllerBridgeInventoryReply reply = await _client.GetControllerBridgeInventoryAsync(
+            new GetControllerBridgeInventoryRequest(),
+            cancellationToken: cancellationToken);
+        return new(
+            reply.Bridges.Select(bridge => new ControllerBridge(
+                new(bridge.Id),
+                bridge.DisplayName,
+                bridge.Connected)).ToImmutableArray(),
+            reply.HasSelectedBridgeId ? new ControllerBridgeId(reply.SelectedBridgeId) : null,
+            reply.Revision,
+            ParseBridgeState(reply.State),
+            reply.Status);
+    }
+
+    public async Task<ControllerBridgeSelection> SelectControllerBridgeAsync(
+        ControllerBridgeId bridgeId,
+        ulong expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ControllerBridgeSelectionReply reply = await _client.SelectControllerBridgeAsync(
+            new SelectControllerBridgeRequest
+            {
+                BridgeId = bridgeId.Value,
+                ExpectedRevision = expectedRevision,
+            },
+            cancellationToken: cancellationToken);
+        return new(new(reply.BridgeId), reply.Revision, ParseBridgeState(reply.State), reply.Status);
     }
 
     public async Task<VideoSelection> SelectVideoSourceAsync(
@@ -223,6 +270,63 @@ public sealed class GrpcConsoleSession : IConsoleSession
         reply.Revision,
         new Uri(reply.LiveStreamUri, UriKind.Absolute),
         reply.Status);
+
+    private static ControllerBridgeState ParseBridgeState(ControllerBridgeStateMessage state) => state switch
+    {
+        ControllerBridgeStateMessage.SelectionRequired => ControllerBridgeState.SelectionRequired,
+        ControllerBridgeStateMessage.Unavailable => ControllerBridgeState.Unavailable,
+        ControllerBridgeStateMessage.Disconnected => ControllerBridgeState.Disconnected,
+        ControllerBridgeStateMessage.Ready => ControllerBridgeState.Ready,
+        ControllerBridgeStateMessage.Faulted => ControllerBridgeState.Faulted,
+        _ => throw new InvalidOperationException("The daemon returned an unknown controller bridge state."),
+    };
+
+    private static ControllerBridgeStatus ParseBridgeStatus(ControllerBridgeStatusMessage status) => new(
+        status.HasSelectedBridgeId ? new ControllerBridgeId(status.SelectedBridgeId) : null,
+        ParseAvailability(status.Availability),
+        status.OutputConnection switch
+        {
+            ControllerOutputConnectionMessage.NotConfigured => ControllerOutputConnection.NotConfigured,
+            ControllerOutputConnectionMessage.DisconnectedUntilInput => ControllerOutputConnection.DisconnectedUntilInput,
+            ControllerOutputConnectionMessage.Connected => ControllerOutputConnection.Connected,
+            ControllerOutputConnectionMessage.Faulted => ControllerOutputConnection.Faulted,
+            _ => throw new InvalidOperationException("The daemon returned an unknown controller output state."),
+        },
+        status.Detail,
+        status.HasLastInventoryAtUnixMs
+            ? DateTimeOffset.FromUnixTimeMilliseconds(status.LastInventoryAtUnixMs)
+            : null);
+
+    private static VideoCaptureStatus ParseVideoStatus(VideoCaptureStatusMessage status) => new(
+        status.HasSelectedSourceId ? new VideoSourceId(status.SelectedSourceId) : null,
+        ParseAvailability(status.Availability),
+        status.CaptureState switch
+        {
+            VideoCaptureStateMessage.SelectionRequired => VideoCaptureState.SelectionRequired,
+            VideoCaptureStateMessage.Starting => VideoCaptureState.Starting,
+            VideoCaptureStateMessage.Streaming => VideoCaptureState.Streaming,
+            VideoCaptureStateMessage.Reconnecting => VideoCaptureState.Reconnecting,
+            VideoCaptureStateMessage.Faulted => VideoCaptureState.Faulted,
+            _ => throw new InvalidOperationException("The daemon returned an unknown video capture state."),
+        },
+        status.ActiveMode is not null
+            ? new VideoMode(
+                checked((ushort)status.ActiveMode.Width),
+                checked((ushort)status.ActiveMode.Height),
+                checked((ushort)status.ActiveMode.FramesPerSecond))
+            : null,
+        status.HasLatestFrameAtUnixMs
+            ? DateTimeOffset.FromUnixTimeMilliseconds(status.LatestFrameAtUnixMs)
+            : null,
+        status.Detail);
+
+    private static HardwareAvailability ParseAvailability(HardwareAvailabilityMessage availability) => availability switch
+    {
+        HardwareAvailabilityMessage.Unknown => HardwareAvailability.Unknown,
+        HardwareAvailabilityMessage.Available => HardwareAvailability.Available,
+        HardwareAvailabilityMessage.Unavailable => HardwareAvailability.Unavailable,
+        _ => throw new InvalidOperationException("The daemon returned an unknown hardware availability."),
+    };
 
     private static InputProfile ParseProfile(InputProfileMessage message) => new InputProfile(
         new((DomainSourceKind)message.SourceKind, message.HardwareId),

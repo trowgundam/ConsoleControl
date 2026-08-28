@@ -18,6 +18,70 @@ internal sealed class ConsoleRuntime(IControllerOutput controllerOutput) : IAsyn
 
     public ControlRequestInfo? PendingControlRequest => _pendingAutomation?.Info;
 
+    public async Task<ControlOwner> GetControlOwnerAsync(
+        ClientId client,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_activeLease is null)
+            {
+                return ControlOwner.None;
+            }
+            if (_activeLease.Owner == client)
+            {
+                return ControlOwner.ThisClient;
+            }
+            return _activeLease.Priority == ControlPriority.InteractiveUser
+                ? ControlOwner.InteractiveClient
+                : ControlOwner.AutomationClient;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public Task<ControllerBridgeInventory> GetControllerBridgeInventoryAsync(
+        CancellationToken cancellationToken) => ControllerBridges.GetInventoryAsync(cancellationToken);
+
+    public Task<ControllerBridgeStatus> GetControllerBridgeStatusAsync(
+        CancellationToken cancellationToken) => controllerOutput is ControllerBridgeRuntime bridges
+            ? bridges.GetStatusAsync(cancellationToken)
+            : Task.FromResult(new ControllerBridgeStatus(
+                null,
+                HardwareAvailability.Unknown,
+                controllerOutput.IsConnected
+                    ? ControllerOutputConnection.Connected
+                    : ControllerOutputConnection.NotConfigured,
+                "This controller output adapter does not expose bridge selection status.",
+                null));
+
+    public async Task<ControllerBridgeSelection> SelectControllerBridgeAsync(
+        ControllerBridgeId bridgeId,
+        ulong expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_activeLease is not null)
+            {
+                throw new ControllerBridgeControlInUseException(
+                    "A controller bridge cannot be changed while a client has control. Release control, refresh the bridge inventory, and retry.");
+            }
+            return await ControllerBridges.SelectAsync(
+                bridgeId,
+                expectedRevision,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<ControlLease> AcquireControlAsync(
         ClientId client,
         ControlPriority priority,
@@ -283,6 +347,10 @@ internal sealed class ConsoleRuntime(IControllerOutput controllerOutput) : IAsyn
             throw new StaleControlLeaseException("The control lease is missing or no longer current.");
         }
     }
+
+    private ControllerBridgeRuntime ControllerBridges =>
+        controllerOutput as ControllerBridgeRuntime
+        ?? throw new InvalidOperationException("Controller bridge selection is unavailable for this output adapter.");
 
     private async ValueTask NeutralizeLockedAsync(CancellationToken cancellationToken)
     {

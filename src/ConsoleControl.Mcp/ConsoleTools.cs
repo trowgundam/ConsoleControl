@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Text.Json;
 
+using ConsoleControl.Client;
 using ConsoleControl.Core;
 
 using Grpc.Core;
@@ -22,6 +23,170 @@ internal sealed class ConsoleTools(
     AutomationControl automation,
     ScreenshotLibrary screenshots)
 {
+    [McpServerTool(Name = "console_get_status", ReadOnly = true),
+     Description("Reports daemon reachability, control availability, and selected controller/video state.")]
+    public async Task<CallToolResult> GetStatus(CancellationToken cancellationToken)
+    {
+        try
+        {
+            ConsoleStatus status = await automation.GetStatusAsync(cancellationToken);
+            return Success("status_observed", "Current cached daemon status.", new
+            {
+                daemon_version = status.DaemonVersion,
+                protocol_version = status.ProtocolVersion,
+                control_owner = SnakeCase(status.ControlOwner),
+                this_mcp_has_control = status.ControlOwner == ControlOwner.ThisClient,
+                controller_bridge = new
+                {
+                    selected_bridge_id = status.ControllerBridge.SelectedBridgeId?.Value,
+                    availability = SnakeCase(status.ControllerBridge.Availability),
+                    output_connection = SnakeCase(status.ControllerBridge.OutputConnection),
+                    detail = status.ControllerBridge.Detail,
+                    last_inventory_at = status.ControllerBridge.LastInventoryAt,
+                },
+                video = new
+                {
+                    selected_source_id = status.Video.SelectedSourceId?.Value,
+                    availability = SnakeCase(status.Video.Availability),
+                    capture_state = SnakeCase(status.Video.CaptureState),
+                    active_mode = status.Video.ActiveMode is { } mode
+                        ? new { width = mode.Width, height = mode.Height, frames_per_second = mode.FramesPerSecond }
+                        : null,
+                    latest_frame_at = status.Video.LatestFrameAt,
+                    detail = status.Video.Detail,
+                },
+                supported_controls = Enum.GetValues<CanonicalDigitalControl>()
+                    .Where(control => control != CanonicalDigitalControl.Unspecified)
+                    .Select(SnakeCase),
+                screenshot_fidelities = new[] { "low", "medium", "high" },
+                sequence_limit = 256,
+            });
+        }
+        catch (RpcException exception)
+        {
+            return RpcError(exception, "status_unavailable", "Start the ConsoleControl daemon, then retry.");
+        }
+    }
+
+    [McpServerTool(Name = "console_get_controller_bridges", ReadOnly = true),
+     Description("Scans the configured Bluetooth adapter for compatible ConsoleControl controller bridges.")]
+    public async Task<CallToolResult> GetControllerBridges(CancellationToken cancellationToken)
+    {
+        try
+        {
+            ControllerBridgeInventory inventory = await automation.GetControllerBridgesAsync(cancellationToken);
+            return Success("controller_bridge_inventory_observed", inventory.Status, new
+            {
+                revision = inventory.Revision,
+                selected_bridge_id = inventory.SelectedBridgeId?.Value,
+                state = SnakeCase(inventory.State),
+                bridges = inventory.Bridges.Select(bridge => new
+                {
+                    bridge_id = bridge.Id.Value,
+                    display_name = bridge.DisplayName,
+                    bluetooth_connected = bridge.BluetoothConnected,
+                }),
+            });
+        }
+        catch (RpcException exception)
+        {
+            return RpcError(exception, "bridge_scan_failed", "Check Bluetooth and the daemon's --adapter setting, then retry.");
+        }
+    }
+
+    [McpServerTool(Name = "console_select_controller_bridge"),
+     Description("Selects one compatible controller bridge. Selection is refused while any client has control.")]
+    public async Task<CallToolResult> SelectControllerBridge(
+        [Description("Opaque bridge ID returned by console_get_controller_bridges")] string bridgeId,
+        [Description("Revision returned by console_get_controller_bridges")] ulong expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            ControllerBridgeSelection selected = await automation.SelectControllerBridgeAsync(
+                new(bridgeId), expectedRevision, cancellationToken);
+            return Success("controller_bridge_selected", selected.Status, new
+            {
+                bridge_id = selected.BridgeId.Value,
+                revision = selected.Revision,
+                state = SnakeCase(selected.State),
+            });
+        }
+        catch (ArgumentException exception)
+        {
+            return ToolError("invalid_bridge", exception.Message, recovery: "Refresh the bridge inventory and use one returned ID.");
+        }
+        catch (RpcException exception)
+        {
+            return RpcError(exception, "bridge_selection_failed", "Release control, refresh the bridge inventory, and retry with its current revision.");
+        }
+    }
+
+    [McpServerTool(Name = "console_get_video_sources", ReadOnly = true),
+     Description("Lists video capture sources and the current selection.")]
+    public async Task<CallToolResult> GetVideoSources(CancellationToken cancellationToken)
+    {
+        try
+        {
+            VideoInventory inventory = await automation.GetVideoSourcesAsync(cancellationToken);
+            return Success("video_source_inventory_observed", inventory.Status, new
+            {
+                revision = inventory.Revision,
+                selected_source_id = inventory.SelectedSourceId?.Value,
+                sources = inventory.Sources.Select(source => new
+                {
+                    source_id = source.Id.Value,
+                    display_name = source.DisplayName,
+                    width = source.PreferredMode.Width,
+                    height = source.PreferredMode.Height,
+                    frames_per_second = source.PreferredMode.FramesPerSecond,
+                }),
+            });
+        }
+        catch (RpcException exception)
+        {
+            return RpcError(exception, "video_inventory_failed", "Check that the capture device is connected and the daemon is running.");
+        }
+    }
+
+    [McpServerTool(Name = "console_select_video_source"),
+     Description("Selects a video source using the current inventory revision.")]
+    public async Task<CallToolResult> SelectVideoSource(
+        [Description("Opaque source ID returned by console_get_video_sources")] string sourceId,
+        [Description("Revision returned by console_get_video_sources")] ulong expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            VideoSelection selected = await automation.SelectVideoSourceAsync(
+                new(sourceId), expectedRevision, cancellationToken);
+            return Success("video_source_selected", selected.Status, new
+            {
+                source_id = selected.SourceId.Value,
+                revision = selected.Revision,
+            });
+        }
+        catch (ArgumentException exception)
+        {
+            return ToolError("invalid_video_source", exception.Message, recovery: "Refresh the video inventory and use one returned ID.");
+        }
+        catch (RpcException exception)
+        {
+            return RpcError(exception, "video_selection_failed", "Refresh the video inventory and retry with its current revision.");
+        }
+    }
+
+    [McpServerTool(Name = "console_release_control"),
+     Description("Releases this MCP process's automation lease and neutralizes controller input. Safe to call repeatedly.")]
+    public async Task<CallToolResult> ReleaseControl()
+    {
+        bool released = await automation.ReleaseControlAsync();
+        return Success(
+            released ? "control_released" : "control_not_owned",
+            released ? "Automation control released." : "This MCP process did not own control.",
+            new { released });
+    }
+
     [McpServerTool(Name = "console_request_control"),
      Description("Requests controller control. A nonblank reason is required and is shown to an interactive user who currently has control. The request waits up to 30 seconds for the user to release or decline control.")]
     public async Task<CallToolResult> RequestControl(
@@ -33,21 +198,25 @@ internal sealed class ConsoleTools(
         {
             bool acquired = await automation.RequestControlAsync(reason, cancellationToken);
             return ControlRequestResult(
-                "granted",
+                "control_granted",
                 acquired ? "Control granted." : "Automation already has control.",
                 isError: false);
         }
         catch (RpcException exception) when (exception.StatusCode == StatusCode.PermissionDenied)
         {
-            return ControlRequestResult("declined", exception.Status.Detail, isError: true);
+            return ControlRequestResult("control_declined", exception.Status.Detail, isError: true);
         }
         catch (RpcException exception) when (exception.StatusCode == StatusCode.DeadlineExceeded)
         {
-            return ControlRequestResult("timed_out", exception.Status.Detail, isError: true);
+            return ControlRequestResult("control_request_timed_out", exception.Status.Detail, isError: true);
         }
         catch (RpcException exception) when (exception.StatusCode == StatusCode.Aborted)
         {
-            return ControlRequestResult("unavailable", exception.Status.Detail, isError: true);
+            return ControlRequestResult("control_unavailable", exception.Status.Detail, isError: true);
+        }
+        catch (RpcException exception)
+        {
+            return RpcError(exception, "control_request_failed", "Check status and retry after resolving the reported condition.");
         }
     }
 
@@ -83,9 +252,10 @@ internal sealed class ConsoleTools(
         }
         catch (RpcException exception)
         {
-            return ToolError(
+            return RpcError(
+                exception,
                 "screenshot_unavailable",
-                $"The daemon could not provide a current screenshot: {exception.Status.Detail}");
+                "Check console_get_status. Start the daemon or restore video capture as reported, then retry.");
         }
     }
 
@@ -142,20 +312,38 @@ internal sealed class ConsoleTools(
     public Task<CallToolResult> Press(
         [Description("Digital control such as a, dpad_right, right_shoulder, or home")] string control,
         [Description("Press duration in milliseconds. Defaults to 80.")] int durationMs = 80,
-        CancellationToken cancellationToken = default) =>
-        Run(new AutomationSequence([
-            new AutomationCommand.Press(ParseControl(control), Milliseconds(durationMs)),
-        ]), ScreenshotFidelity.Low, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return Run(new AutomationSequence([
+                new AutomationCommand.Press(ParseControl(control), Milliseconds(durationMs)),
+            ]), ScreenshotFidelity.Low, cancellationToken);
+        }
+        catch (ArgumentException exception)
+        {
+            return Task.FromResult(ToolError("invalid_request", exception.Message));
+        }
+    }
 
     [McpServerTool(Name = "console_hold"),
      Description("Holds one digital console control for a bounded duration, then releases it.")]
     public Task<CallToolResult> Hold(
         [Description("Digital control such as a, dpad_right, right_shoulder, or home")] string control,
         [Description("Hold duration in milliseconds")] int durationMs,
-        CancellationToken cancellationToken = default) =>
-        Run(new AutomationSequence([
-            new AutomationCommand.Hold(ParseControl(control), Milliseconds(durationMs)),
-        ]), ScreenshotFidelity.Low, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return Run(new AutomationSequence([
+                new AutomationCommand.Hold(ParseControl(control), Milliseconds(durationMs)),
+            ]), ScreenshotFidelity.Low, cancellationToken);
+        }
+        catch (ArgumentException exception)
+        {
+            return Task.FromResult(ToolError("invalid_request", exception.Message));
+        }
+    }
 
     [McpServerTool(Name = "console_run_sequence"),
      Description("Runs up to 256 ordered digital input, pause, and screenshot commands. Press advances the timeline. Hold schedules its release but does not advance the timeline, so later commands may overlap it. Pause advances the timeline while holds remain active.")]
@@ -172,13 +360,14 @@ internal sealed class ConsoleTools(
     {
         try
         {
+            ArgumentNullException.ThrowIfNull(commands);
             ImmutableArray<AutomationCommand> parsed = commands.Select(ParseCommand).ToImmutableArray();
             return Run(
                 new(parsed, startScreenshot, endScreenshot),
                 ParseFidelity(screenshotFidelity),
                 cancellationToken);
         }
-        catch (ArgumentException exception)
+        catch (Exception exception) when (exception is ArgumentException or OverflowException)
         {
             return Task.FromResult(ToolError("invalid_request", exception.Message));
         }
@@ -197,6 +386,10 @@ internal sealed class ConsoleTools(
         catch (InvalidOperationException exception)
         {
             return ControlRequestResult("control_required", exception.Message, isError: true);
+        }
+        catch (RpcException exception)
+        {
+            return RpcError(exception, "automation_failed", "Check status, request control again if needed, and retry.");
         }
         ImmutableArray<RetainedRendering> renderings;
         try
@@ -226,10 +419,10 @@ internal sealed class ConsoleTools(
                 : renderings[renderingIndex++];
             captureMetadata.Add(new
             {
-                capture.Name,
+                name = capture.Name,
                 scheduled_at_ms = Math.Ceiling(capture.ScheduledAt.TotalMilliseconds),
                 actual_at_ms = Math.Ceiling(capture.ActualAt.TotalMilliseconds),
-                capture.Failure,
+                failure = capture.Failure,
                 sequence = capture.Screenshot?.Sequence,
                 screenshot_id = rendering?.Id.Value,
                 fidelity = rendering?.Fidelity.ToString().ToLowerInvariant(),
@@ -241,18 +434,27 @@ internal sealed class ConsoleTools(
             });
         }
 
+        string outcome = result.Outcome switch
+        {
+            AutomationOutcome.Completed => "automation_completed",
+            AutomationOutcome.Preempted => "automation_preempted",
+            AutomationOutcome.Cancelled => "automation_cancelled",
+            AutomationOutcome.BridgeUnavailable => "controller_bridge_unavailable",
+            AutomationOutcome.ScreenshotFailed => "screenshot_failed",
+            _ => "automation_failed",
+        };
         List<ContentBlock> content =
         [
-            new TextContentBlock
-            {
-                Text = JsonSerializer.Serialize(new
+            EnvelopeBlock(
+                outcome,
+                result.Detail ?? "Automation ended without additional detail.",
+                new
                 {
-                    outcome = result.Outcome.ToString(),
                     elapsed_ms = Math.Ceiling(result.Elapsed.TotalMilliseconds),
-                    detail = result.Detail,
                     captures = captureMetadata,
-                }),
-            },
+                },
+                result.Outcome == AutomationOutcome.Completed ? null : AutomationRecovery(result.Outcome),
+                result.Outcome is AutomationOutcome.BridgeUnavailable or AutomationOutcome.ScreenshotFailed),
         ];
         renderingIndex = 0;
         foreach (AutomationCapture capture in result.Captures)
@@ -275,22 +477,22 @@ internal sealed class ConsoleTools(
     {
         Content =
         [
-            new TextContentBlock
-            {
-                Text = JsonSerializer.Serialize(new
+            EnvelopeBlock(
+                "screenshot_rendered",
+                "Screenshot rendered from a retained console video frame.",
+                new
                 {
                     screenshot_id = screenshot.Id.Value,
-                    screenshot.Generation,
-                    screenshot.Sequence,
+                    generation = screenshot.Generation,
+                    sequence = screenshot.Sequence,
                     fidelity = screenshot.Fidelity.ToString().ToLowerInvariant(),
-                    screenshot.Width,
-                    screenshot.Height,
+                    width = screenshot.Width,
+                    height = screenshot.Height,
                     source_width = screenshot.SourceWidth,
                     source_height = screenshot.SourceHeight,
                     received_at = screenshot.ReceivedAt,
                     expires_at = screenshot.ExpiresAt,
                 }),
-            },
             ImageContentBlock.FromBytes(screenshot.Jpeg, "image/jpeg"),
         ],
     };
@@ -298,37 +500,87 @@ internal sealed class ConsoleTools(
     private static CallToolResult ToolError(
         string outcome,
         string detail,
-        ScreenshotId? screenshotId = null) => new()
+        ScreenshotId? screenshotId = null,
+        string? recovery = null,
+        bool retryable = false) => new()
         {
-            Content =
-            [
-                new TextContentBlock
-                {
-                    Text = JsonSerializer.Serialize(new
-                    {
-                        outcome,
-                        detail,
-                        screenshot_id = screenshotId?.Value,
-                    }),
-                },
-            ],
+            Content = [EnvelopeBlock(
+                outcome,
+                detail,
+                screenshotId is { } id ? new { screenshot_id = id.Value } : new { },
+                recovery ?? "Correct the reported condition and retry.",
+                retryable)],
             IsError = true,
         };
+
+    private static CallToolResult RpcError(
+        RpcException exception,
+        string fallbackOutcome,
+        string recovery) => ToolError(
+            FailureCode(exception) ?? exception.StatusCode switch
+            {
+                StatusCode.Unavailable => "daemon_unavailable",
+                StatusCode.Aborted => "revision_conflict",
+                StatusCode.FailedPrecondition => "control_or_selection_conflict",
+                StatusCode.InvalidArgument => "invalid_request",
+                StatusCode.PermissionDenied => "permission_denied",
+                StatusCode.DeadlineExceeded => "timed_out",
+                _ => fallbackOutcome,
+            },
+            string.IsNullOrWhiteSpace(exception.Status.Detail)
+                ? $"The daemon returned {exception.StatusCode}."
+                : exception.Status.Detail,
+            recovery: recovery,
+            retryable: FailureRetryable(exception) || exception.StatusCode is StatusCode.Unavailable or StatusCode.DeadlineExceeded);
+
+    private static CallToolResult Success(string outcome, string detail, object data) => new()
+    {
+        Content = [EnvelopeBlock(outcome, detail, data)],
+    };
 
     private static CallToolResult ControlRequestResult(
         string outcome,
         string detail,
-        bool isError) => new()
+        bool isError) => isError
+            ? ToolError(outcome, detail, recovery: ControlRecovery(outcome), retryable: outcome is "timed_out" or "unavailable")
+            : Success(outcome, detail, new { has_control = true });
+
+    private static TextContentBlock EnvelopeBlock(
+        string outcome,
+        string detail,
+        object data,
+        string? recovery = null,
+        bool retryable = false) => new()
         {
-            Content =
-        [
-            new TextContentBlock
-            {
-                Text = JsonSerializer.Serialize(new { outcome, detail }),
-            },
-        ],
-            IsError = isError,
+            Text = JsonSerializer.Serialize(new { outcome, detail, recovery, retryable, data }),
         };
+
+    private static string? FailureCode(RpcException exception) =>
+        exception.Trailers.FirstOrDefault(entry => entry.Key == "console-failure-code")?.Value;
+
+    private static bool FailureRetryable(RpcException exception) =>
+        string.Equals(
+            exception.Trailers.FirstOrDefault(entry => entry.Key == "console-retryable")?.Value,
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+
+    private static string ControlRecovery(string outcome) => outcome switch
+    {
+        "control_declined" => "Wait for the interactive user to release control, or ask again later with a clear reason.",
+        "control_request_timed_out" => "Check console_get_status, then request control again if an interactive client still owns it.",
+        "control_unavailable" => "Check console_get_status and resolve the reported controller bridge or lease condition.",
+        "control_required" => "Call console_request_control with a nonblank reason before sending input.",
+        _ => "Check console_get_status and retry after resolving the reported condition.",
+    };
+
+    private static string AutomationRecovery(AutomationOutcome outcome) => outcome switch
+    {
+        AutomationOutcome.Preempted => "An interactive user took control. Request control again only when appropriate.",
+        AutomationOutcome.Cancelled => "Submit the sequence again if it is still needed.",
+        AutomationOutcome.BridgeUnavailable => "Inspect console_get_status and console_get_controller_bridges, then select or reconnect a bridge.",
+        AutomationOutcome.ScreenshotFailed => "Inspect console_get_status and console_get_video_sources, then retry after video is streaming.",
+        _ => "Inspect console_get_status before retrying.",
+    };
 
     private static AutomationCommand ParseCommand(SequenceCommandInput command) =>
         command.Action.Trim().ToLowerInvariant() switch
@@ -387,4 +639,13 @@ internal sealed class ConsoleTools(
     }
 
     private static TimeSpan Milliseconds(int value) => TimeSpan.FromMilliseconds(value);
+
+    private static string SnakeCase<T>(T value) where T : struct, Enum
+    {
+        string name = value.ToString();
+        return string.Concat(name.Select((character, index) =>
+            char.IsUpper(character) && index > 0
+                ? $"_{char.ToLowerInvariant(character)}"
+                : char.ToLowerInvariant(character).ToString()));
+    }
 }

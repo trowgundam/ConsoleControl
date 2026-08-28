@@ -9,7 +9,7 @@ The controller hardware proof has passed. The current desktop slice has daemon-b
 The project contains three applications:
 
 - `ConsoleControl.Daemon` owns video capture, the controller bridge, configuration, and control arbitration.
-- `ConsoleControl.Gui` starts or connects to the daemon, displays live video, and forwards keyboard or physical-controller input.
+- `ConsoleControl.Gui` connects to the daemon, displays live video, and forwards keyboard or physical-controller input.
 - `ConsoleControl.Mcp` exposes screenshots and bounded digital-input sequences to an MCP client over stdio.
 
 The current release supports one local console session, selectable video capture, and one Switch Pro-compatible controller personality. It does not include remote access, audio, recording, motion, rumble, or analog automation.
@@ -69,7 +69,7 @@ The nRF52840 rates a flash page for 10,000 erase cycles. Ordinary control and pe
 
 The daemon presents a narrow client API over gRPC on loopback TCP. Generated protobuf messages remain transport details. GUI code uses canonical domain types through `ConsoleControl.Client`.
 
-The GUI starts the daemon when no compatible instance is available. The daemon publishes its URI, process ID, protocol version, instance nonce, and per-launch bearer secret in a user-only runtime file. The endpoint component owns publication and channel creation. It does not prebuild Unix socket or Windows named-pipe implementations.
+The daemon and GUI are started separately. Both bind or connect only to explicit loopback addresses. Process discovery, automatic launch, endpoint authentication, Unix sockets, and Windows named pipes are not implemented.
 
 The daemon runs FFmpeg as a child process behind `IVideoCaptureAdapter`. Development requires `ffmpeg` and `v4l2-ctl` on `PATH`. FFmpeg reads MJPEG from the selected V4L2 device and copies the compressed frames without transcoding.
 
@@ -85,7 +85,7 @@ Connect the flashed controller bridge to the Switch dock. Start the daemon:
 dotnet run --project src/ConsoleControl.Daemon -- \
   --listen http://127.0.0.1:5041 \
   --video-listen http://127.0.0.1:5042 \
-  --bridge F6:D5:24:56:6F:E2
+  --adapter hci0
 ```
 
 In another terminal, start the GUI:
@@ -95,7 +95,7 @@ dotnet run --project src/ConsoleControl.Gui -- \
   --daemon http://127.0.0.1:5041
 ```
 
-The GUI lists MJPEG V4L2 capture devices by their stable `/dev/v4l/by-id` names. Choose a device from **Video source**. The daemon remembers the selection and opens its best MJPEG mode up to 1920x1080 at 60 fps.
+The GUI scans the configured Bluetooth adapter for firmware advertising the ConsoleControl service UUID. Choose a device from **Controller bridge**. It also lists MJPEG V4L2 capture devices by their stable `/dev/v4l/by-id` names. Choose a device from **Video source**. The daemon remembers both selections and opens the capture device's best MJPEG mode up to 1920x1080 at 60 fps. A controller bridge cannot be changed while any client has control.
 
 The GUI reports `Ready` after the daemon connects to the bridge and grants control. Choose Keyboard or one connected gamepad from the input-source list. Only the selected source sends input. Switching sources, losing keyboard focus, or disconnecting the selected gamepad clears its input before another source can take over.
 
@@ -105,7 +105,7 @@ The default keyboard mapping uses the arrow keys for the D-pad, `X/Z/S/A` for `A
 
 Choose **Configure input mapping…** to open the modal mapping window. Click a Switch button, then press a key, gamepad button, or trigger on the selected host input source. Use **L STICK** or **R STICK**, then move a host stick, to bind its paired axes. Repeat button capture to assign several host controls to the same Switch control. One host control can also be captured for several Switch controls. Select a displayed button or trigger binding to remove it, then save the profile. Profiles are stored by keyboard identity or SDL device GUID, so equivalent controllers reuse the same profile. The daemon persists profiles in its per-user application-data directory. Stick dead zones, inversion, and scaling are represented in each profile; detailed transform editing is not yet exposed in the GUI.
 
-On-screen controls remain available with either forwarded source. Each click adds an 80 ms overlay without releasing buttons or axes held by the selected source. This temporary slice still uses explicit process startup, a fixed bridge address, and an unauthenticated loopback endpoint.
+On-screen controls remain available with either forwarded source. Each click adds an 80 ms overlay without releasing buttons or axes held by the selected source. This slice still uses explicit process startup and an unauthenticated loopback endpoint.
 
 The GUI starts as an observer. Choose **Take Control** to send input. If automation owns the control lease, this action stops its running sequence, sends a neutral controller state, and grants control to the GUI. Choose **Release Control** before automation can take control again.
 
@@ -118,7 +118,31 @@ dotnet run --project src/ConsoleControl.Mcp -- \
   --daemon http://127.0.0.1:5041
 ```
 
-The server exposes `console_request_control`, `console_get_screenshot`, `console_render_screenshot`, `console_press`, `console_hold`, and `console_run_sequence`. Call `console_request_control` with a nonblank reason before sending input. If the GUI has control, it displays that reason and lets the user release control or decline the request. An accepted automation lease remains active between input calls. A GUI takeover revokes it immediately. Input tools refuse commands until the agent requests control again.
+An MCP client configuration that accepts command-and-argument entries can use:
+
+```json
+{
+  "mcpServers": {
+    "console-control": {
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "/absolute/path/to/ConsoleControl/src/ConsoleControl.Mcp",
+        "--",
+        "--daemon",
+        "http://127.0.0.1:5041"
+      ]
+    }
+  }
+}
+```
+
+The server exposes status, controller-bridge and video-source inventory and selection, control acquisition and release, screenshots, individual digital input, and bounded sequences. Call `console_get_status` first. Status reads cached state and does not scan hardware. If status reports an unknown, unavailable, or unselected device, enumerate that device type and make an explicit selection before requesting control. Call `console_request_control` with a nonblank reason before sending input. If the GUI has control, it displays that reason and lets the user release control or decline the request. An accepted automation lease remains active between input calls. A GUI takeover revokes it immediately. Input tools refuse commands until the agent requests control again. `console_release_control` is idempotent.
+
+Every MCP tool returns a JSON envelope in its first text block. The envelope always contains `outcome`, `detail`, `recovery`, `retryable`, and `data`; device and result fields use descriptive snake_case names. The MCP initialization response also supplies the essential discovery, screenshot, control, and sequence rules so a client can operate without repository context.
+
+See [the MCP operation skill](.agents/skills/operate-console-control/SKILL.md) for the complete tool workflow and recovery rules. See [the Switch navigation skill](.agents/skills/navigate-nintendo-switch/SKILL.md) for menu navigation conventions.
 
 `console_get_screenshot` and `console_run_sequence` return `low` fidelity by default. `low` is at most 640×360. `medium` is at most 1280×720. `high` returns the exact original JPEG at its captured dimensions. Every screenshot result includes an opaque `screenshot_id`. Call `console_render_screenshot` with that ID to inspect the same frame at another fidelity. The MCP server retains at most 16 original screenshots and 64 MiB for five minutes. Expired or evicted IDs return an error that tells the caller to capture a new screenshot.
 

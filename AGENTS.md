@@ -4,7 +4,7 @@
 
 Read `README.md` for scope and delivery phase. Read `CONTEXT.md` before naming domain concepts. Read `docs/architecture.md` for ownership, data flow, and implementation gates. Read the relevant file under `docs/adr/` before changing an accepted boundary.
 
-The repository is in the hardware-proof phase. Do not scaffold the full solution until the exact nRF52840 board passes the first implementation gate in `docs/architecture.md`.
+The repository has passed its controller, GUI, video, and digital MCP proofs on the target hardware. Preserve those working paths and verify real hardware when changing their boundaries.
 
 ## Preserve the product boundary
 
@@ -28,11 +28,11 @@ The repository is in the hardware-proof phase. Do not scaffold the full solution
 - Accept executable firmware only through a signed update package. The bootloader verifies the signature before activation.
 - Test power loss and invalid images against the actual recovery path before describing OTA as safe.
 
-## Keep the first release narrow
+## Keep the current release narrow
 
-The first release is the daemon plus Avalonia GUI. It includes live video, device selection, keyboard input, SDL controller forwarding and mapping, one interactive control lease, and the Switch Hori personality.
+The current release includes the daemon, Avalonia GUI, and local stdio MCP server. It includes live video, explicit controller and video selection, keyboard input, SDL controller forwarding and mapping, one control lease, screenshots, and bounded digital automation.
 
-MCP, screenshots, bounded sequences, motion, rumble, audio, recording, remote access, multiple consoles, service installation, bundled FFmpeg, and additional local transports remain later work. Add one of these only when the user changes the release scope.
+Analog automation, motion, rumble, audio, recording, remote access, multiple consoles, service installation, bundled FFmpeg, and additional local transports remain later work. Add one only when the user changes the release scope.
 
 ## Structure new work
 
@@ -49,5 +49,8 @@ Run the narrowest repeatable checks first, then exercise the real path affected 
 - Protocol tests use recorded packets and descriptors without hiding byte-level mismatches behind mocks.
 - Hardware acceptance tests record board identity, firmware version, capture format, console result, and recovery result.
 - GUI work is complete only after driving the real application and checking the visible result.
+- MCP work is complete only after exercising the published tool through a running daemon. Check both successful results and structured errors.
+
+Run `dotnet format ConsoleControl.slnx --no-restore` after each coherent C# change. Then build with disabled build servers and one MSBuild node before running the narrowest relevant checks.
 
 When hardware is unavailable, report the unverified boundary. Do not replace a missing hardware result with an inference from a mock or successful compilation.

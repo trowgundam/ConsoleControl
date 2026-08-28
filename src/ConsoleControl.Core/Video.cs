@@ -37,6 +37,23 @@ public sealed record VideoSelection(
     ulong Revision,
     string Status);
 
+public enum VideoCaptureState
+{
+    SelectionRequired,
+    Starting,
+    Streaming,
+    Reconnecting,
+    Faulted,
+}
+
+public sealed record VideoCaptureStatus(
+    VideoSourceId? SelectedSourceId,
+    HardwareAvailability Availability,
+    VideoCaptureState CaptureState,
+    VideoMode? ActiveMode,
+    DateTimeOffset? LatestFrameAt,
+    string Detail);
+
 public sealed record EncodedVideoFrame(
     ulong Generation,
     ulong Sequence,

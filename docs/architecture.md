@@ -108,7 +108,9 @@ Screenshot capture and bounded digital-input sequences use separate client opera
 
 ## Daemon ownership
 
-`ConsoleRuntime` owns:
+`ConsoleRuntime` owns control arbitration and controller writes. `ControllerBridgeRuntime` owns compatible-bridge inventory, persisted explicit selection, revision checks, and the active BlueZ adapter binding. `VideoRuntime` owns video inventory, selection, capture, and latest-frame publication.
+
+Together these daemon runtimes own:
 
 - capture and controller-bridge lifetimes;
 - persisted hardware selection and controller mappings;
@@ -144,20 +146,13 @@ internal interface IControllerOutput : IAsyncDisposable
 }
 ```
 
-The controller output adapter hides BLE discovery, pairing, packet fragmentation, retries, state sequencing, personality transfer, and report encoding. The video adapter hides UVC enumeration, FFmpeg invocation, decoding, and frame-buffer ownership.
+The BlueZ bridge adapter performs a bounded active scan on the configured adapter and includes only devices advertising the firmware service UUID. A selected bridge is persisted even while unavailable; the daemon never silently substitutes another device. The adapter resolves the state characteristic by UUID after connection, because BlueZ object paths are not stable. Selection is rejected while any control lease is active.
+
+The controller output adapter hides BLE discovery, connection, GATT lookup, state writes, and report encoding. The video adapter hides UVC enumeration, FFmpeg invocation, decoding, and frame-buffer ownership.
 
 ## Local process boundary
 
-The daemon binds gRPC only to loopback TCP. Its user-only runtime file contains:
-
-- schema version;
-- loopback URI;
-- daemon process ID;
-- protocol version;
-- random instance nonce;
-- per-launch bearer secret.
-
-The client verifies process liveness and protocol compatibility before reuse. If no compatible daemon exists, the GUI starts one and waits for readiness. Endpoint publication and channel creation form the transport seam. The first release does not implement Unix sockets or Windows named pipes.
+The daemon binds gRPC and MJPEG only to explicit loopback TCP addresses. Clients receive the daemon URI as a command-line option. The daemon does not yet publish an endpoint file, authenticate clients, or manage its own process lifecycle. This explicit transport boundary can later gain a local Windows transport without changing domain interfaces.
 
 ## Controller personality format
 
@@ -272,4 +267,4 @@ tools/
 4. Add the FFmpeg adapter and measure capture-to-display latency before choosing child-process or native bindings.
 5. Add the Avalonia GUI and SDL input. Prove the real NanoKVM-to-Switch path.
 6. Implement and fault-test signed OTA after the boot layout is known.
-7. Add MCP screenshots and bounded sequences after the GUI release is stable.
+7. Add MCP screenshots, hardware inventory and selection, control arbitration, and bounded sequences after the GUI release is stable.

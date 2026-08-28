@@ -23,6 +23,11 @@ internal static class VideoRuntimeChecks
                 new VideoSelectionStore(selectionPath),
                 new VideoStreamAddress(new Uri("http://127.0.0.1:5042/video/live.mjpeg")));
             await runtime.InitializeAsync(CancellationToken.None);
+            int enumerationsAfterInitialization = adapter.EnumerationCount;
+            VideoCaptureStatus cachedStatus = runtime.GetStatus();
+            Require(adapter.EnumerationCount == enumerationsAfterInitialization
+                && cachedStatus.SelectedSourceId == first.Id,
+                "cached video status unexpectedly enumerated capture hardware");
             VideoInventory initial = await runtime.GetInventoryAsync(CancellationToken.None);
             Require(initial.SelectedSourceId == first.Id && initial.Revision == 1,
                 "video initialization did not select and persist the first source");
@@ -137,9 +142,13 @@ internal static class VideoRuntimeChecks
         public FakeVideoSession? Current { get; private set; }
         public bool Available { get; set; } = true;
         public int OpenCount { get; private set; }
+        public int EnumerationCount { get; private set; }
 
-        public Task<ImmutableArray<VideoSource>> GetSourcesAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(sources);
+        public Task<ImmutableArray<VideoSource>> GetSourcesAsync(CancellationToken cancellationToken)
+        {
+            EnumerationCount++;
+            return Task.FromResult(sources);
+        }
 
         public Task<IVideoCaptureSession> OpenAsync(
             VideoSource source,

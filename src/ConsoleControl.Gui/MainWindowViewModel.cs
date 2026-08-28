@@ -20,10 +20,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private InputForwarder? _forwarder;
     private InputSourceOption? _selectedInputSource;
     private VideoSource? _selectedVideoSource;
+    private ControllerBridge? _selectedControllerBridge;
     private VideoPresenter? _videoPresenter;
     private Bitmap? _videoImage;
     private ulong _videoRevision;
     private bool _loadingVideoSources;
+    private bool _loadingControllerBridges;
+    private ulong _controllerBridgeRevision;
     private InputConfiguration? _inputConfiguration;
     private PendingControlRequest? _pendingControlRequest;
     private readonly CancellationTokenSource _statusStop = new();
@@ -53,6 +56,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public ObservableCollection<InputSourceOption> InputSources { get; } = [];
     public ObservableCollection<VideoSource> VideoSources { get; } = [];
+    public ObservableCollection<ControllerBridge> ControllerBridges { get; } = [];
     internal InputForwarder? Forwarder => _forwarder;
 
     public InputSourceOption? SelectedInputSource
@@ -107,6 +111,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    public ControllerBridge? SelectedControllerBridge
+    {
+        get => _selectedControllerBridge;
+        set
+        {
+            if (_selectedControllerBridge == value)
+            {
+                return;
+            }
+            _selectedControllerBridge = value;
+            OnPropertyChanged();
+            if (!_loadingControllerBridges && value is not null)
+            {
+                _ = SelectControllerBridgeAsync(value);
+            }
+        }
+    }
+
     public Bitmap? VideoImage
     {
         get => _videoImage;
@@ -135,12 +157,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public async Task InitializeAsync()
     {
+        await InitializeControllerBridgesAsync();
         await InitializeVideoAsync();
         try
         {
             ConsoleStatus status = await _session.GetStatusAsync(CancellationToken.None);
             _inputConfiguration = await _session.GetInputConfigurationAsync(CancellationToken.None);
-            StatusText = status.ControlAvailable
+            StatusText = status.ControlOwner == ControlOwner.None
                 ? "Observing. Choose Take Control to send input."
                 : "Another client has control. Choose Take Control to preempt automation.";
             ApplyPendingControlRequest(status.PendingControlRequest);
@@ -409,6 +432,50 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             _loadingVideoSources = false;
             VideoStatusText = $"Video unavailable: {exception.Message}";
+        }
+    }
+
+    private async Task InitializeControllerBridgesAsync()
+    {
+        try
+        {
+            ControllerBridgeInventory inventory = await _session.GetControllerBridgeInventoryAsync(
+                CancellationToken.None);
+            _loadingControllerBridges = true;
+            ControllerBridges.Clear();
+            foreach (ControllerBridge bridge in inventory.Bridges)
+            {
+                ControllerBridges.Add(bridge);
+            }
+            _controllerBridgeRevision = inventory.Revision;
+            _selectedControllerBridge = ControllerBridges.FirstOrDefault(bridge =>
+                bridge.Id == inventory.SelectedBridgeId);
+            OnPropertyChanged(nameof(SelectedControllerBridge));
+            _loadingControllerBridges = false;
+            StatusText = inventory.Status;
+        }
+        catch (Exception exception)
+        {
+            _loadingControllerBridges = false;
+            StatusText = $"Controller bridge scan failed: {exception.Message}";
+        }
+    }
+
+    private async Task SelectControllerBridgeAsync(ControllerBridge bridge)
+    {
+        try
+        {
+            ControllerBridgeSelection selection = await _session.SelectControllerBridgeAsync(
+                bridge.Id,
+                _controllerBridgeRevision,
+                CancellationToken.None);
+            _controllerBridgeRevision = selection.Revision;
+            StatusText = selection.Status;
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"Controller bridge selection failed: {exception.Message}";
+            await InitializeControllerBridgesAsync();
         }
     }
 

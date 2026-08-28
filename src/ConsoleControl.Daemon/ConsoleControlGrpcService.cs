@@ -25,22 +25,29 @@ internal sealed class ConsoleControlGrpcService(
     AutomationRuntime automation)
     : ConsoleControlService.ConsoleControlServiceBase
 {
-    public override Task<GetStatusReply> GetStatus(
+    public override async Task<GetStatusReply> GetStatus(
         GetStatusRequest request,
         ServerCallContext context)
     {
+        ClientId client = ParseClient(request.ClientId);
+        ControllerBridgeStatus bridge = await runtime.GetControllerBridgeStatusAsync(
+            context.CancellationToken).ConfigureAwait(false);
+        VideoCaptureStatus videoStatus = video.GetStatus();
         GetStatusReply reply = new()
         {
-            BridgeConnected = runtime.BridgeConnected,
-            ControlAvailable = runtime.ControlAvailable,
-            Detail = runtime.BridgeConnected ? "Controller bridge connected" : "Controller bridge disconnected",
+            DaemonVersion = typeof(ConsoleControlGrpcService).Assembly.GetName().Version?.ToString() ?? "unknown",
+            ProtocolVersion = 1,
+            ControlOwner = ToMessage(await runtime.GetControlOwnerAsync(
+                client, context.CancellationToken).ConfigureAwait(false)),
+            ControllerBridge = ToMessage(bridge),
+            Video = ToMessage(videoStatus),
         };
         if (runtime.PendingControlRequest is { } pending)
         {
             reply.PendingControlRequestId = pending.Id.ToString("D");
             reply.PendingControlRequestReason = pending.Reason;
         }
-        return Task.FromResult(reply);
+        return reply;
     }
 
     public override async Task Control(
@@ -214,8 +221,67 @@ internal sealed class ConsoleControlGrpcService(
 
     public override async Task<VideoInventoryReply> GetVideoInventory(
         GetVideoInventoryRequest request,
-        ServerCallContext context) =>
-        ToReply(await video.GetInventoryAsync(context.CancellationToken).ConfigureAwait(false));
+        ServerCallContext context)
+    {
+        try
+        {
+            return ToReply(await video.GetInventoryAsync(context.CancellationToken).ConfigureAwait(false));
+        }
+        catch (ConsoleOperationException exception)
+        {
+            throw ToRpcException(exception);
+        }
+    }
+
+    public override async Task<ControllerBridgeInventoryReply> GetControllerBridgeInventory(
+        GetControllerBridgeInventoryRequest request,
+        ServerCallContext context)
+    {
+        try
+        {
+            return ToReply(await runtime.GetControllerBridgeInventoryAsync(context.CancellationToken).ConfigureAwait(false));
+        }
+        catch (ConsoleOperationException exception)
+        {
+            throw ToRpcException(exception);
+        }
+    }
+
+    public override async Task<ControllerBridgeSelectionReply> SelectControllerBridge(
+        SelectControllerBridgeRequest request,
+        ServerCallContext context)
+    {
+        try
+        {
+            ControllerBridgeSelection selection = await runtime.SelectControllerBridgeAsync(
+                new ControllerBridgeId(request.BridgeId),
+                request.ExpectedRevision,
+                context.CancellationToken).ConfigureAwait(false);
+            return new()
+            {
+                BridgeId = selection.BridgeId.Value,
+                Revision = selection.Revision,
+                State = ToMessage(selection.State),
+                Status = selection.Status,
+            };
+        }
+        catch (ControllerBridgeSelectionConflictException exception)
+        {
+            throw new RpcException(new Status(StatusCode.Aborted, exception.Message));
+        }
+        catch (ControllerBridgeControlInUseException exception)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, exception.Message));
+        }
+        catch (ConsoleOperationException exception)
+        {
+            throw ToRpcException(exception);
+        }
+        catch (ArgumentException exception)
+        {
+            throw InvalidArgument(exception.Message);
+        }
+    }
 
     public override async Task<VideoSelectionReply> SelectVideoSource(
         SelectVideoSourceRequest request,
@@ -237,6 +303,10 @@ internal sealed class ConsoleControlGrpcService(
         catch (VideoSelectionConflictException exception)
         {
             throw new RpcException(new Status(StatusCode.Aborted, exception.Message));
+        }
+        catch (ConsoleOperationException exception)
+        {
+            throw ToRpcException(exception);
         }
         catch (ArgumentException exception)
         {
@@ -472,6 +542,133 @@ internal sealed class ConsoleControlGrpcService(
         }));
         return reply;
     }
+
+    private static ControllerBridgeInventoryReply ToReply(ControllerBridgeInventory inventory)
+    {
+        ControllerBridgeInventoryReply reply = new()
+        {
+            Revision = inventory.Revision,
+            State = ToMessage(inventory.State),
+            Status = inventory.Status,
+        };
+        if (inventory.SelectedBridgeId is { } selected)
+        {
+            reply.SelectedBridgeId = selected.Value;
+        }
+        reply.Bridges.AddRange(inventory.Bridges.Select(bridge => new ControllerBridgeMessage
+        {
+            Id = bridge.Id.Value,
+            DisplayName = bridge.DisplayName,
+            Connected = bridge.BluetoothConnected,
+        }));
+        return reply;
+    }
+
+    private static ControllerBridgeStateMessage ToMessage(ControllerBridgeState state) => state switch
+    {
+        ControllerBridgeState.SelectionRequired => ControllerBridgeStateMessage.SelectionRequired,
+        ControllerBridgeState.Unavailable => ControllerBridgeStateMessage.Unavailable,
+        ControllerBridgeState.Disconnected => ControllerBridgeStateMessage.Disconnected,
+        ControllerBridgeState.Ready => ControllerBridgeStateMessage.Ready,
+        ControllerBridgeState.Faulted => ControllerBridgeStateMessage.Faulted,
+        _ => throw new ArgumentOutOfRangeException(nameof(state)),
+    };
+
+    private static ControlOwnerMessage ToMessage(ControlOwner owner) => owner switch
+    {
+        ControlOwner.None => ControlOwnerMessage.None,
+        ControlOwner.ThisClient => ControlOwnerMessage.ThisClient,
+        ControlOwner.InteractiveClient => ControlOwnerMessage.InteractiveClient,
+        ControlOwner.AutomationClient => ControlOwnerMessage.AutomationClient,
+        _ => throw new ArgumentOutOfRangeException(nameof(owner)),
+    };
+
+    private static HardwareAvailabilityMessage ToMessage(HardwareAvailability availability) => availability switch
+    {
+        HardwareAvailability.Unknown => HardwareAvailabilityMessage.Unknown,
+        HardwareAvailability.Available => HardwareAvailabilityMessage.Available,
+        HardwareAvailability.Unavailable => HardwareAvailabilityMessage.Unavailable,
+        _ => throw new ArgumentOutOfRangeException(nameof(availability)),
+    };
+
+    private static ControllerBridgeStatusMessage ToMessage(ControllerBridgeStatus status)
+    {
+        ControllerBridgeStatusMessage message = new()
+        {
+            Availability = ToMessage(status.Availability),
+            OutputConnection = status.OutputConnection switch
+            {
+                ControllerOutputConnection.NotConfigured => ControllerOutputConnectionMessage.NotConfigured,
+                ControllerOutputConnection.DisconnectedUntilInput => ControllerOutputConnectionMessage.DisconnectedUntilInput,
+                ControllerOutputConnection.Connected => ControllerOutputConnectionMessage.Connected,
+                ControllerOutputConnection.Faulted => ControllerOutputConnectionMessage.Faulted,
+                _ => throw new ArgumentOutOfRangeException(nameof(status)),
+            },
+            Detail = status.Detail,
+        };
+        if (status.SelectedBridgeId is { } selected)
+        {
+            message.SelectedBridgeId = selected.Value;
+        }
+        if (status.LastInventoryAt is { } lastInventory)
+        {
+            message.LastInventoryAtUnixMs = lastInventory.ToUnixTimeMilliseconds();
+        }
+        return message;
+    }
+
+    private static VideoCaptureStatusMessage ToMessage(VideoCaptureStatus status)
+    {
+        VideoCaptureStatusMessage message = new()
+        {
+            Availability = ToMessage(status.Availability),
+            CaptureState = status.CaptureState switch
+            {
+                VideoCaptureState.SelectionRequired => VideoCaptureStateMessage.SelectionRequired,
+                VideoCaptureState.Starting => VideoCaptureStateMessage.Starting,
+                VideoCaptureState.Streaming => VideoCaptureStateMessage.Streaming,
+                VideoCaptureState.Reconnecting => VideoCaptureStateMessage.Reconnecting,
+                VideoCaptureState.Faulted => VideoCaptureStateMessage.Faulted,
+                _ => throw new ArgumentOutOfRangeException(nameof(status)),
+            },
+            Detail = status.Detail,
+        };
+        if (status.SelectedSourceId is { } selected)
+        {
+            message.SelectedSourceId = selected.Value;
+        }
+        if (status.ActiveMode is { } mode)
+        {
+            message.ActiveMode = new()
+            {
+                Width = mode.Width,
+                Height = mode.Height,
+                FramesPerSecond = mode.FramesPerSecond,
+            };
+        }
+        if (status.LatestFrameAt is { } latest)
+        {
+            message.LatestFrameAtUnixMs = latest.ToUnixTimeMilliseconds();
+        }
+        return message;
+    }
+
+    private static RpcException ToRpcException(ConsoleOperationException exception)
+    {
+        Metadata trailers = new()
+        {
+            { "console-failure-code", ToFailureCode(exception.Code) },
+            { "console-retryable", exception.Retryable ? "true" : "false" },
+        };
+        return new RpcException(new Status(StatusCode.Unavailable, exception.Message), trailers);
+    }
+
+    private static string ToFailureCode(ConsoleFailureCode code) => code switch
+    {
+        ConsoleFailureCode.ControllerBridgeInventoryFailed => "controller_bridge_inventory_failed",
+        ConsoleFailureCode.VideoSourceInventoryFailed => "video_source_inventory_failed",
+        _ => throw new ArgumentOutOfRangeException(nameof(code)),
+    };
 
     private static InputProfileMessage ToMessage(InputProfile profile)
     {

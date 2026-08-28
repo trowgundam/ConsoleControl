@@ -8,3 +8,8 @@ dotnet run \
   --project "$repo_root/tests/ConsoleControl.IntegrationTests" \
   --no-build \
   --no-restore
+dotnet run \
+  --project "$repo_root/tests/ConsoleControl.IntegrationTests" \
+  --no-build \
+  --no-restore \
+  -- mcp-transport

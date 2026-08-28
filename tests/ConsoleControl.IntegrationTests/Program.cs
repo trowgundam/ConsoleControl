@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 
+using ConsoleControl.Client;
 using ConsoleControl.Controller.Bluetooth;
 using ConsoleControl.Core;
 using ConsoleControl.Daemon;
@@ -28,6 +29,47 @@ if (args is ["screenshots"])
 {
     ScreenshotLibraryChecks.Run();
     Console.WriteLine("screenshot library checks: passed");
+    return;
+}
+
+if (args is ["controller-bridges"])
+{
+    await ControllerBridgeChecks.RunAsync();
+    Console.WriteLine("controller bridge checks: passed");
+    return;
+}
+
+if (args is ["mcp-transport"])
+{
+    await McpTransportChecks.RunAsync();
+    Console.WriteLine("MCP stdio transport: passed");
+    return;
+}
+
+if (args is ["controller-bridge-inventory", string bridgeDaemonUri])
+{
+    await using GrpcConsoleSession session = GrpcConsoleSession.Connect(new Uri(bridgeDaemonUri));
+    ControllerBridgeInventory inventory = await session.GetControllerBridgeInventoryAsync(
+        CancellationToken.None);
+    Console.WriteLine($"revision={inventory.Revision} selected={inventory.SelectedBridgeId?.Value ?? "none"} state={inventory.State}");
+    foreach (ControllerBridge bridge in inventory.Bridges)
+    {
+        Console.WriteLine($"{bridge.Id.Value}\t{bridge.DisplayName}\tbluetooth-connected={bridge.BluetoothConnected}");
+    }
+    return;
+}
+
+if (args is ["controller-bridge-connect", string connectDaemonUri, string bridgeId])
+{
+    await using GrpcConsoleSession session = GrpcConsoleSession.Connect(new Uri(connectDaemonUri));
+    ControllerBridgeInventory inventory = await session.GetControllerBridgeInventoryAsync(
+        CancellationToken.None);
+    ControllerBridgeSelection selection = await session.SelectControllerBridgeAsync(
+        new(bridgeId), inventory.Revision, CancellationToken.None);
+    await using IControlSession control = await session.TakeControlAsync(
+        ControlPriority.InteractiveUser, CancellationToken.None);
+    await control.SetStateAsync(ControllerState.Neutral, CancellationToken.None);
+    Console.WriteLine($"selected={selection.BridgeId.Value} revision={selection.Revision} state=connected");
     return;
 }
 
@@ -167,6 +209,7 @@ VideoRuntimeChecks.VerifyJpegDimensions();
 await VideoRuntimeChecks.RunAsync();
 await AutomationChecks.RunAsync();
 ScreenshotLibraryChecks.Run();
+await ControllerBridgeChecks.RunAsync();
 
 FakeControllerOutput output = new();
 await using ConsoleRuntime runtime = new(output);

@@ -20,7 +20,16 @@ internal sealed class VideoRuntime(
     private ulong _generation;
     private ulong _sequence;
     private string _status = "No video source selected";
+    private VideoCaptureStatus _captureStatus = new(
+        null,
+        HardwareAvailability.Unknown,
+        VideoCaptureState.SelectionRequired,
+        null,
+        null,
+        "No video source is selected.");
     private bool _disposed;
+
+    public VideoCaptureStatus GetStatus() => Volatile.Read(ref _captureStatus);
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
@@ -47,13 +56,20 @@ internal sealed class VideoRuntime(
         catch (Exception exception)
         {
             _status = $"Video startup failed: {exception.Message}";
+            SetCaptureStatus(VideoCaptureState.Faulted, _status);
         }
     }
 
     public async Task<VideoInventory> GetInventoryAsync(CancellationToken cancellationToken)
     {
-        ImmutableArray<VideoSource> sources = await adapter.GetSourcesAsync(cancellationToken)
+        ImmutableArray<VideoSource> sources = await GetSourcesAsync(cancellationToken)
             .ConfigureAwait(false);
+        HardwareAvailability availability = _selected is null
+            ? HardwareAvailability.Unknown
+            : sources.Any(source => source.Id == _selected)
+                ? HardwareAvailability.Available
+                : HardwareAvailability.Unavailable;
+        _captureStatus = _captureStatus with { Availability = availability };
         return new(sources, _selected, _revision, streamAddress.Uri, _status);
     }
 
@@ -70,7 +86,7 @@ internal sealed class VideoRuntime(
                 throw new VideoSelectionConflictException(
                     $"Video selection revision {expectedRevision} is stale; current revision is {_revision}.");
             }
-            ImmutableArray<VideoSource> sources = await adapter.GetSourcesAsync(cancellationToken)
+            ImmutableArray<VideoSource> sources = await GetSourcesAsync(cancellationToken)
                 .ConfigureAwait(false);
             VideoSource source = sources.FirstOrDefault(candidate => candidate.Id == sourceId)
                 ?? throw new ArgumentException("The selected video source is unavailable.", nameof(sourceId));
@@ -127,12 +143,40 @@ internal sealed class VideoRuntime(
         }
     }
 
+    private async Task<ImmutableArray<VideoSource>> GetSourcesAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await adapter.GetSourcesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new ConsoleOperationException(
+                ConsoleFailureCode.VideoSourceInventoryFailed,
+                $"Video source inventory failed: {exception.Message}",
+                retryable: true,
+                exception);
+        }
+    }
+
     private async Task SelectCoreLockedAsync(
         VideoSource source,
         bool persist,
         CancellationToken cancellationToken)
     {
         _status = $"Opening {source.DisplayName}";
+        _captureStatus = new(
+            source.Id,
+            HardwareAvailability.Available,
+            VideoCaptureState.Starting,
+            source.PreferredMode,
+            null,
+            _status);
         await StopCaptureAsync().ConfigureAwait(false);
         _selected = source.Id;
         _generation++;
@@ -173,6 +217,7 @@ internal sealed class VideoRuntime(
                     }
                     _session = session;
                     _status = $"Reconnected: {source.DisplayName}, {source.PreferredMode}";
+                    SetCaptureStatus(VideoCaptureState.Starting, _status, source.PreferredMode);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -182,6 +227,7 @@ internal sealed class VideoRuntime(
                 {
                     failures++;
                     _status = $"Video disconnected; reconnecting: {exception.Message}";
+                    SetCaptureStatus(VideoCaptureState.Reconnecting, _status, source.PreferredMode);
                     continue;
                 }
             }
@@ -203,6 +249,13 @@ internal sealed class VideoRuntime(
                         source.PreferredMode,
                         DateTimeOffset.UtcNow,
                         jpeg);
+                    _captureStatus = new(
+                        source.Id,
+                        HardwareAvailability.Available,
+                        VideoCaptureState.Streaming,
+                        source.PreferredMode,
+                        frame.ReceivedAt,
+                        _status);
                     _frames.Publish(frame);
                 }
                 throw new EndOfStreamException("FFmpeg video capture ended.");
@@ -215,6 +268,7 @@ internal sealed class VideoRuntime(
             {
                 failures++;
                 _status = $"Video disconnected; reconnecting: {exception.Message}";
+                SetCaptureStatus(VideoCaptureState.Reconnecting, _status, source.PreferredMode);
                 _frames.Interrupt();
             }
             finally
@@ -229,6 +283,18 @@ internal sealed class VideoRuntime(
 
         }
     }
+
+    private void SetCaptureStatus(
+        VideoCaptureState state,
+        string detail,
+        VideoMode? mode = null) =>
+        _captureStatus = _captureStatus with
+        {
+            SelectedSourceId = _selected,
+            CaptureState = state,
+            ActiveMode = mode ?? _captureStatus.ActiveMode,
+            Detail = detail,
+        };
 
     private async Task StopCaptureAsync()
     {
