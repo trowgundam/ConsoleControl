@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using ConsoleControl.Contracts;
 using ConsoleControl.Core;
 using Grpc.Core;
@@ -83,24 +84,12 @@ public sealed class GrpcConsoleSession : IConsoleSession
             throw new InvalidOperationException("This client already has a control session.");
         }
 
-        AcquireControlReply reply = await _client.AcquireControlAsync(
-            new AcquireControlRequest
-            {
-                ClientId = _clientId.Value.ToString("D"),
-                Priority = priority switch
-                {
-                    DomainPriority.Automation => ContractPriority.Automation,
-                    DomainPriority.InteractiveUser => ContractPriority.InteractiveUser,
-                    _ => throw new ArgumentOutOfRangeException(nameof(priority)),
-                },
-            },
-            cancellationToken: cancellationToken);
-
         _control = new GrpcControlSession(
             _client,
             _clientId,
-            new LeaseGeneration(reply.LeaseGeneration),
+            priority,
             OnControlReleased);
+        await _control.StartAsync(cancellationToken).ConfigureAwait(false);
         return _control;
     }
 
@@ -195,26 +184,71 @@ public sealed class GrpcConsoleSession : IConsoleSession
     private sealed class GrpcControlSession(
         ConsoleControlService.ConsoleControlServiceClient client,
         ClientId clientId,
-        LeaseGeneration generation,
+        DomainPriority priority,
         Action<GrpcControlSession> onReleased) : IControlSession
     {
-        private readonly SemaphoreSlim _gate = new(1, 1);
+        private static readonly TimeSpan SendInterval = TimeSpan.FromMilliseconds(1000d / 60d);
+        private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromMilliseconds(500);
+        private readonly object _gate = new();
+        private readonly CancellationTokenSource _stop = new();
+        private readonly TaskCompletionSource _started =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource _changeSignal =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private ControllerState _desired = ControllerState.Neutral;
+        private ulong _revision;
+        private TaskCompletionSource? _barrier;
+        private ControlConnectionState _connectionState = ControlConnectionState.Connecting;
+        private Task? _runningSupervisor;
         private bool _disposed;
 
-        public async Task SetStateAsync(
+        public ControlConnectionState ConnectionState
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _connectionState;
+                }
+            }
+        }
+
+        public event EventHandler<ControlConnectionState>? ConnectionStateChanged;
+
+        public async Task StartAsync(CancellationToken cancellationToken)
+        {
+            _runningSupervisor = SuperviseAsync(_stop.Token);
+            await _started.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        public Task SetStateAsync(
             ControllerState state,
             CancellationToken cancellationToken)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
+            cancellationToken.ThrowIfCancellationRequested();
+            Task? wait = null;
+            TaskCompletionSource signal;
+            lock (_gate)
             {
-                await SetStateCoreAsync(state, cancellationToken).ConfigureAwait(false);
+                if (state != ControllerState.Neutral && _barrier is not null)
+                {
+                    return Task.CompletedTask;
+                }
+                _desired = state;
+                _revision++;
+                if (state == ControllerState.Neutral)
+                {
+                    _barrier?.TrySetResult();
+                    _barrier = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    wait = _barrier.Task;
+                }
+                signal = _changeSignal;
+                _changeSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
             }
-            finally
-            {
-                _gate.Release();
-            }
+
+            signal.TrySetResult();
+            return wait is null ? Task.CompletedTask : wait.WaitAsync(cancellationToken);
         }
 
         public async ValueTask DisposeAsync()
@@ -224,55 +258,230 @@ public sealed class GrpcConsoleSession : IConsoleSession
                 return;
             }
 
-            await _gate.WaitAsync().ConfigureAwait(false);
+            _disposed = true;
+            using CancellationTokenSource neutralTimeout = new(TimeSpan.FromMilliseconds(500));
             try
             {
-                if (_disposed)
-                {
-                    return;
-                }
-
-                using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(3));
-                try
-                {
-                    await SetStateCoreAsync(ControllerState.Neutral, timeout.Token).ConfigureAwait(false);
-                }
-                finally
-                {
-                    await client.ReleaseControlAsync(
-                        new ReleaseControlRequest
-                        {
-                            ClientId = clientId.Value.ToString("D"),
-                            LeaseGeneration = generation.Value,
-                        },
-                        cancellationToken: timeout.Token);
-                }
-
-                _disposed = true;
-                onReleased(this);
+                await SetNeutralForShutdownAsync(neutralTimeout.Token).ConfigureAwait(false);
             }
-            catch (RpcException exception) when (
-                exception.StatusCode is StatusCode.Unavailable or StatusCode.Cancelled or StatusCode.DeadlineExceeded)
+            catch (OperationCanceledException)
             {
-                _disposed = true;
-                onReleased(this);
+            }
+            _stop.Cancel();
+            lock (_gate)
+            {
+                _changeSignal.TrySetResult();
+            }
+            try
+            {
+                if (_runningSupervisor is not null)
+                {
+                    await _runningSupervisor.WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+                }
+            }
+            catch (TimeoutException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
             }
             finally
             {
-                _gate.Release();
-                _gate.Dispose();
+                SetConnectionState(ControlConnectionState.Stopped);
+                lock (_gate)
+                {
+                    _barrier?.TrySetCanceled();
+                    _barrier = null;
+                }
+                onReleased(this);
+                _stop.Dispose();
             }
         }
 
-        private async Task SetStateCoreAsync(
-            ControllerState state,
-            CancellationToken cancellationToken)
+        private async Task SetNeutralForShutdownAsync(CancellationToken cancellationToken)
         {
-            await client.SetControllerStateAsync(
-                new SetControllerStateRequest
+            Task wait;
+            TaskCompletionSource signal;
+            lock (_gate)
+            {
+                _desired = ControllerState.Neutral;
+                _revision++;
+                _barrier?.TrySetResult();
+                _barrier = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                wait = _barrier.Task;
+                signal = _changeSignal;
+                _changeSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+            signal.TrySetResult();
+            await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task SuperviseAsync(CancellationToken cancellationToken)
+        {
+            int failureCount = 0;
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    SetConnectionState(failureCount == 0
+                        ? ControlConnectionState.Connecting
+                        : ControlConnectionState.Reconnecting);
+                    await RunStreamAsync(cancellationToken).ConfigureAwait(false);
+                    failureCount = 0;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (RpcException exception) when (exception.StatusCode == StatusCode.Aborted)
+                {
+                    SetConnectionState(ControlConnectionState.WaitingForControl);
+                    _started.TrySetResult();
+                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+                    failureCount++;
+                }
+                catch (BridgeUnavailableException)
+                {
+                    SetConnectionState(ControlConnectionState.WaitingForBridge);
+                    _started.TrySetResult();
+                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+                    failureCount++;
+                }
+                catch (Exception)
+                {
+                    SetConnectionState(ControlConnectionState.Reconnecting);
+                    _started.TrySetResult();
+                    await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(2000, 200 * ++failureCount)), cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
+        }
+
+        private async Task RunStreamAsync(CancellationToken cancellationToken)
+        {
+            using CancellationTokenSource streamStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using AsyncDuplexStreamingCall<ControlStreamRequest, ControlStreamEvent> call =
+                client.Control(cancellationToken: streamStop.Token);
+            await call.RequestStream.WriteAsync(new ControlStreamRequest
+            {
+                Open = new OpenControlStream
                 {
                     ClientId = clientId.Value.ToString("D"),
-                    LeaseGeneration = generation.Value,
+                    Priority = priority switch
+                    {
+                        DomainPriority.Automation => ContractPriority.Automation,
+                        DomainPriority.InteractiveUser => ContractPriority.InteractiveUser,
+                        _ => throw new ArgumentOutOfRangeException(nameof(priority)),
+                    },
+                },
+            }, cancellationToken).ConfigureAwait(false);
+
+            if (!await call.ResponseStream.MoveNext(cancellationToken).ConfigureAwait(false) ||
+                call.ResponseStream.Current.BodyCase != ControlStreamEvent.BodyOneofCase.Granted)
+            {
+                throw new RpcException(new Status(StatusCode.Unavailable, "The daemon did not grant control."));
+            }
+
+            lock (_gate)
+            {
+                _desired = ControllerState.Neutral;
+                _revision++;
+            }
+            await WriteStateAsync(call.RequestStream, ControllerState.Neutral, cancellationToken).ConfigureAwait(false);
+            CompleteBarrier();
+            SetConnectionState(ControlConnectionState.Ready);
+            _started.TrySetResult();
+
+            Task writer = PumpStatesAsync(call.RequestStream, streamStop.Token);
+            Task reader = WatchEventsAsync(call.ResponseStream, streamStop.Token);
+            Task completed = await Task.WhenAny(writer, reader).ConfigureAwait(false);
+            streamStop.Cancel();
+            try
+            {
+                await Task.WhenAll(writer, reader).ConfigureAwait(false);
+            }
+            catch when (completed.IsFaulted)
+            {
+                await completed.ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        private static async Task WatchEventsAsync(
+            IAsyncStreamReader<ControlStreamEvent> reader,
+            CancellationToken cancellationToken)
+        {
+            while (await reader.MoveNext(cancellationToken).ConfigureAwait(false))
+            {
+                if (reader.Current.BodyCase == ControlStreamEvent.BodyOneofCase.Condition &&
+                    reader.Current.Condition == ControlCondition.BridgeUnavailable)
+                {
+                    throw new BridgeUnavailableException();
+                }
+            }
+            throw new RpcException(new Status(StatusCode.Unavailable, "The control stream ended."));
+        }
+
+        private async Task PumpStatesAsync(
+            IClientStreamWriter<ControlStreamRequest> writer,
+            CancellationToken cancellationToken)
+        {
+            ulong sentRevision;
+            lock (_gate)
+            {
+                sentRevision = _revision;
+            }
+            long lastWrite = Stopwatch.GetTimestamp();
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                ControllerState desired;
+                ulong revision;
+                bool barrier;
+                Task changed;
+                lock (_gate)
+                {
+                    desired = _desired;
+                    revision = _revision;
+                    barrier = _barrier is not null;
+                    changed = _changeSignal.Task;
+                }
+
+                bool heartbeatDue = Stopwatch.GetElapsedTime(lastWrite) >= HeartbeatInterval;
+                if (revision == sentRevision && !heartbeatDue)
+                {
+                    TimeSpan heartbeatWait = HeartbeatInterval - Stopwatch.GetElapsedTime(lastWrite);
+                    await Task.WhenAny(changed, Task.Delay(heartbeatWait, cancellationToken)).ConfigureAwait(false);
+                    continue;
+                }
+                if (!barrier && !heartbeatDue)
+                {
+                    TimeSpan cadenceWait = SendInterval - Stopwatch.GetElapsedTime(lastWrite);
+                    if (cadenceWait > TimeSpan.Zero)
+                    {
+                        await Task.WhenAny(changed, Task.Delay(cadenceWait, cancellationToken)).ConfigureAwait(false);
+                        continue;
+                    }
+                }
+
+                await WriteStateAsync(writer, desired, cancellationToken).ConfigureAwait(false);
+                sentRevision = revision;
+                lastWrite = Stopwatch.GetTimestamp();
+                if (barrier)
+                {
+                    CompleteBarrier();
+                }
+            }
+        }
+
+        private static Task WriteStateAsync(
+            IClientStreamWriter<ControlStreamRequest> writer,
+            ControllerState state,
+            CancellationToken cancellationToken) =>
+            writer.WriteAsync(new ControlStreamRequest
+            {
+                State = new ControllerStateMessage
+                {
                     Buttons = (uint)state.Buttons,
                     Dpad = (uint)state.DPad,
                     LeftStickX = state.LeftStick.X,
@@ -282,7 +491,34 @@ public sealed class GrpcConsoleSession : IConsoleSession
                     LeftTrigger = state.LeftTrigger.Value,
                     RightTrigger = state.RightTrigger.Value,
                 },
-                cancellationToken: cancellationToken);
+            }, cancellationToken);
+
+        private void CompleteBarrier()
+        {
+            TaskCompletionSource? barrier;
+            lock (_gate)
+            {
+                barrier = _barrier;
+                _barrier = null;
+            }
+            barrier?.TrySetResult();
+        }
+
+        private void SetConnectionState(ControlConnectionState state)
+        {
+            lock (_gate)
+            {
+                if (_connectionState == state)
+                {
+                    return;
+                }
+                _connectionState = state;
+            }
+            ConnectionStateChanged?.Invoke(this, state);
+        }
+
+        private sealed class BridgeUnavailableException : Exception
+        {
         }
     }
 }

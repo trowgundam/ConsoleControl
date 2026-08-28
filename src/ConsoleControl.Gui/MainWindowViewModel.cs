@@ -88,7 +88,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             _forwarder.StatusChanged += OnForwardingStatusChanged;
             RefreshInputSources();
             SelectedInputSource = InputSources[0];
-            StatusText = "Ready";
+            StatusText = FormatConnectionState(_control.ConnectionState);
         }
         catch (Exception exception)
         {
@@ -187,6 +187,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void OnForwardingStatusChanged(object? sender, string status) =>
         Dispatcher.UIThread.Post(() => StatusText = status);
+
+    private static string FormatConnectionState(ControlConnectionState state) => state switch
+    {
+        ControlConnectionState.Ready => "Ready",
+        ControlConnectionState.WaitingForBridge => "Controller bridge disconnected; reconnecting...",
+        ControlConnectionState.WaitingForControl => "Control is held by another client; waiting...",
+        ControlConnectionState.Reconnecting => "Daemon disconnected; reconnecting...",
+        ControlConnectionState.Stopped => "Controller forwarding stopped",
+        _ => "Connecting to daemon...",
+    };
 
     private void RefreshInputSources()
     {

@@ -40,7 +40,8 @@ internal sealed class InputForwarder : IAsyncDisposable
     private readonly Dictionary<Guid, CanonicalDigitalControl> _overlays = [];
     private readonly Task _writer;
     private HostInputSnapshot _latestSnapshot = HostInputSnapshot.Empty;
-    private int _snapshotQueued;
+    private ulong _snapshotRevision;
+    private bool _snapshotDrainQueued;
     private InputConfiguration _configuration;
     private InputSourceOption? _selected;
     private InputProfile? _profile;
@@ -64,15 +65,27 @@ internal sealed class InputForwarder : IAsyncDisposable
         _gamepads.DevicesChanged += OnDevicesChanged;
         _gamepads.SnapshotChanged += OnGamepadSnapshot;
         _gamepads.SelectedDeviceDisconnected += OnGamepadDisconnected;
+        _control.ConnectionStateChanged += OnConnectionStateChanged;
         _writer = Task.Run(RunWriterAsync);
     }
 
     public event EventHandler? SourcesChanged;
     public event EventHandler<string>? StatusChanged;
 
-    public IReadOnlyList<InputSourceOption> Sources =>
-        [InputSourceOption.Keyboard, .. _gamepads.Devices.Select(device => new InputSourceOption(
-            $"gamepad:{device.Id.Value}", device.DisplayName, device.ProfileKey, device.Id))];
+    public IReadOnlyList<InputSourceOption> Sources
+    {
+        get
+        {
+            List<InputSourceOption> sources =
+            [InputSourceOption.Keyboard, .. _gamepads.Devices.Select(device => new InputSourceOption(
+                $"gamepad:{device.Id.Value}", device.DisplayName, device.ProfileKey, device.Id))];
+            if (_selected is { GamepadId: not null } selected && sources.All(source => source.Id != selected.Id))
+            {
+                sources.Add(selected with { DisplayName = $"{selected.DisplayName} (disconnected)" });
+            }
+            return sources;
+        }
+    }
 
     public InputSourceOption? Selected => _selected;
     public InputProfile? ActiveProfile => _profile;
@@ -250,6 +263,7 @@ internal sealed class InputForwarder : IAsyncDisposable
         _gamepads.DevicesChanged -= OnDevicesChanged;
         _gamepads.SnapshotChanged -= OnGamepadSnapshot;
         _gamepads.SelectedDeviceDisconnected -= OnGamepadDisconnected;
+        _control.ConnectionStateChanged -= OnConnectionStateChanged;
         await _gamepads.DisposeAsync().ConfigureAwait(false);
         _stop.Dispose();
     }
@@ -325,21 +339,67 @@ internal sealed class InputForwarder : IAsyncDisposable
         {
             _ = EnqueueAndWaitAsync(async () =>
             {
+                lock (_snapshotGate)
+                {
+                    _latestSnapshot = HostInputSnapshot.Empty;
+                    _snapshotRevision++;
+                }
                 _primary = ControllerState.Neutral;
+                _overlays.Clear();
                 await SendComposedAsync().ConfigureAwait(false);
                 StatusChanged?.Invoke(this, "Selected controller disconnected");
+                SourcesChanged?.Invoke(this, EventArgs.Empty);
             }, CancellationToken.None);
         }
     }
 
+    private void OnConnectionStateChanged(object? sender, ControlConnectionState state)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (state != ControlConnectionState.Ready)
+        {
+            _ = EnqueueAndWaitAsync(() =>
+            {
+                lock (_snapshotGate)
+                {
+                    _pressedKeys.Clear();
+                    _latestSnapshot = HostInputSnapshot.Empty;
+                    _snapshotRevision++;
+                }
+                _primary = ControllerState.Neutral;
+                _lastSent = ControllerState.Neutral;
+                _overlays.Clear();
+                return Task.CompletedTask;
+            }, CancellationToken.None);
+        }
+
+        StatusChanged?.Invoke(this, state switch
+        {
+            ControlConnectionState.Ready => "Ready",
+            ControlConnectionState.WaitingForBridge => "Controller bridge disconnected; reconnecting...",
+            ControlConnectionState.WaitingForControl => "Control is held by another client; waiting...",
+            ControlConnectionState.Reconnecting => "Daemon disconnected; reconnecting...",
+            ControlConnectionState.Stopped => "Controller forwarding stopped",
+            _ => "Connecting to daemon...",
+        });
+    }
+
     private void QueueSnapshot(HostInputSnapshot snapshot)
     {
+        bool enqueue;
         lock (_snapshotGate)
         {
             _latestSnapshot = snapshot;
+            _snapshotRevision++;
+            enqueue = !_snapshotDrainQueued;
+            _snapshotDrainQueued = true;
         }
 
-        if (Interlocked.Exchange(ref _snapshotQueued, 1) == 0)
+        if (enqueue)
         {
             _commands.Writer.TryWrite(DrainLatestSnapshotAsync);
         }
@@ -347,20 +407,33 @@ internal sealed class InputForwarder : IAsyncDisposable
 
     private async Task DrainLatestSnapshotAsync()
     {
-        HostInputSnapshot snapshot;
-        lock (_snapshotGate)
+        while (true)
         {
-            snapshot = _latestSnapshot;
-        }
-
-        Interlocked.Exchange(ref _snapshotQueued, 0);
-        if (_profile is not null)
-        {
-            ControllerState mapped = InputMapper.Map(_profile, snapshot);
-            if (mapped != _primary)
+            HostInputSnapshot snapshot;
+            ulong revision;
+            lock (_snapshotGate)
             {
-                _primary = mapped;
-                await SendComposedAsync().ConfigureAwait(false);
+                snapshot = _latestSnapshot;
+                revision = _snapshotRevision;
+            }
+
+            if (_profile is not null)
+            {
+                ControllerState mapped = InputMapper.Map(_profile, snapshot);
+                if (mapped != _primary)
+                {
+                    _primary = mapped;
+                    await SendComposedAsync().ConfigureAwait(false);
+                }
+            }
+
+            lock (_snapshotGate)
+            {
+                if (_snapshotRevision == revision)
+                {
+                    _snapshotDrainQueued = false;
+                    return;
+                }
             }
         }
     }

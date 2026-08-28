@@ -25,7 +25,21 @@ public interface IConsoleSession : IAsyncDisposable
 
 public interface IControlSession : IAsyncDisposable
 {
+    ControlConnectionState ConnectionState { get; }
+
+    event EventHandler<ControlConnectionState>? ConnectionStateChanged;
+
     Task SetStateAsync(
         ControllerState state,
         CancellationToken cancellationToken);
+}
+
+public enum ControlConnectionState
+{
+    Connecting,
+    Ready,
+    WaitingForBridge,
+    WaitingForControl,
+    Reconnecting,
+    Stopped,
 }

@@ -7,7 +7,12 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/ConsoleControl.Controller.Bluetooth/ConsoleControl.Controller.Bluetooth.csproj" />
+    <ProjectReference Include="../../src/ConsoleControl.Client/ConsoleControl.Client.csproj" />
+    <ProjectReference Include="../../src/ConsoleControl.Contracts/ConsoleControl.Contracts.csproj" />
     <ProjectReference Include="../../src/ConsoleControl.Core/ConsoleControl.Core.csproj" />
     <ProjectReference Include="../../src/ConsoleControl.Daemon/ConsoleControl.Daemon.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 </Project>

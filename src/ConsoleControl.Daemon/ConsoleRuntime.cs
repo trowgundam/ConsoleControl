@@ -49,6 +49,10 @@ internal sealed class ConsoleRuntime(IControllerOutput controllerOutput) : IAsyn
         try
         {
             RequireCurrentLease(client, generation);
+            if (!controllerOutput.IsConnected)
+            {
+                await controllerOutput.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            }
             await controllerOutput.WriteStateAsync(state, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -57,18 +61,33 @@ internal sealed class ConsoleRuntime(IControllerOutput controllerOutput) : IAsyn
         }
     }
 
-    public async ValueTask ReleaseControlAsync(
+    public async ValueTask<bool> TryReleaseControlAsync(
         ClientId client,
         LeaseGeneration generation,
         CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_disposed)
+        {
+            return false;
+        }
+
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            RequireCurrentLease(client, generation);
-            await NeutralizeLockedAsync(cancellationToken).ConfigureAwait(false);
-            _activeLease = null;
+            if (_activeLease is not { } lease || lease.Owner != client || lease.Generation != generation)
+            {
+                return false;
+            }
+
+            try
+            {
+                await NeutralizeLockedAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _activeLease = null;
+            }
+            return true;
         }
         finally
         {

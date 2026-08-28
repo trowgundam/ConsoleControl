@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 
 DaemonOptions options = DaemonOptions.Parse(args);
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+builder.Logging.AddFilter("Grpc.AspNetCore.Server.ServerCallHandler", LogLevel.Warning);
 builder.WebHost.ConfigureKestrel(kestrel =>
     kestrel.Listen(IPAddress.Loopback, options.Port, listen =>
         listen.Protocols = HttpProtocols.Http2));

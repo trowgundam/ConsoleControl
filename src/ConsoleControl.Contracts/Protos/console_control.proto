@@ -6,9 +6,7 @@ package consolecontrol.v1;
 
 service ConsoleControlService {
   rpc GetStatus (GetStatusRequest) returns (GetStatusReply);
-  rpc AcquireControl (AcquireControlRequest) returns (AcquireControlReply);
-  rpc SetControllerState (SetControllerStateRequest) returns (SetControllerStateReply);
-  rpc ReleaseControl (ReleaseControlRequest) returns (ReleaseControlReply);
+  rpc Control (stream ControlStreamRequest) returns (stream ControlStreamEvent);
   rpc GetInputConfiguration (GetInputConfigurationRequest) returns (InputConfigurationReply);
   rpc SaveInputProfile (SaveInputProfileRequest) returns (InputConfigurationReply);
 }
@@ -21,36 +19,45 @@ message GetStatusReply {
   string detail = 3;
 }
 
-message AcquireControlRequest {
+message OpenControlStream {
   string client_id = 1;
   ControlPriority priority = 2;
 }
 
-message AcquireControlReply {
+message ControlGranted {
   uint64 lease_generation = 1;
 }
 
-message SetControllerStateRequest {
-  string client_id = 1;
-  uint64 lease_generation = 2;
-  uint32 buttons = 3;
-  uint32 dpad = 4;
-  uint32 left_stick_x = 5;
-  uint32 left_stick_y = 6;
-  uint32 right_stick_x = 7;
-  uint32 right_stick_y = 8;
-  uint32 left_trigger = 9;
-  uint32 right_trigger = 10;
+message ControllerStateMessage {
+  uint32 buttons = 1;
+  uint32 dpad = 2;
+  uint32 left_stick_x = 3;
+  uint32 left_stick_y = 4;
+  uint32 right_stick_x = 5;
+  uint32 right_stick_y = 6;
+  uint32 left_trigger = 7;
+  uint32 right_trigger = 8;
 }
 
-message SetControllerStateReply {}
-
-message ReleaseControlRequest {
-  string client_id = 1;
-  uint64 lease_generation = 2;
+message ControlStreamRequest {
+  oneof body {
+    OpenControlStream open = 1;
+    ControllerStateMessage state = 2;
+  }
 }
 
-message ReleaseControlReply {}
+message ControlStreamEvent {
+  oneof body {
+    ControlGranted granted = 1;
+    ControlCondition condition = 2;
+  }
+}
+
+enum ControlCondition {
+  CONTROL_CONDITION_UNSPECIFIED = 0;
+  CONTROL_CONDITION_BRIDGE_UNAVAILABLE = 1;
+  CONTROL_CONDITION_LEASE_REVOKED = 2;
+}
 
 message GetInputConfigurationRequest {}
 

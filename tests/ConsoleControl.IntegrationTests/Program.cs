@@ -127,6 +127,8 @@ finally
     }
 }
 
+await StreamingTransportChecks.RunAsync();
+
 FakeControllerOutput output = new();
 await using ConsoleRuntime runtime = new(output);
 ClientId owner = new(Guid.Parse("11111111-1111-1111-1111-111111111111"));
@@ -150,15 +152,22 @@ catch (StaleControlLeaseException)
 }
 
 Require(output.States.Count == 1, "stale lease reached controller output");
-await runtime.ReleaseControlAsync(owner, lease.Generation, CancellationToken.None);
-Require(output.States.SequenceEqual([pressed, ControllerState.Neutral]),
-    "release did not neutralize through controller output");
+output.Disconnect();
+await runtime.SetControllerStateAsync(owner, lease.Generation, ControllerState.Neutral, CancellationToken.None);
+Require(output.ConnectCount == 1 && output.IsConnected,
+    "a state write did not reconnect the controller bridge");
+bool released = await runtime.TryReleaseControlAsync(owner, lease.Generation, CancellationToken.None);
+Require(released && output.States.SequenceEqual([pressed, ControllerState.Neutral, ControllerState.Neutral]),
+    "stream cleanup did not neutralize and release current control");
+bool staleRelease = await runtime.TryReleaseControlAsync(owner, lease.Generation, CancellationToken.None);
+Require(!staleRelease, "repeated stream cleanup affected a released generation");
 
 Console.WriteLine("controller encoding: passed");
 Console.WriteLine("lease generation: passed");
 Console.WriteLine("neutral on release: passed");
 Console.WriteLine("input mapping: passed");
 Console.WriteLine("input profile persistence: passed");
+Console.WriteLine("streaming transport: passed");
 
 static void AssertEncoding(ControllerState state, byte[] expected, string name)
 {
@@ -180,9 +189,18 @@ file sealed class FakeControllerOutput : IControllerOutput
 {
     public List<ControllerState> States { get; } = [];
 
-    public bool IsConnected => true;
+    public bool IsConnected { get; private set; } = true;
 
-    public Task ConnectAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public int ConnectCount { get; private set; }
+
+    public Task ConnectAsync(CancellationToken cancellationToken)
+    {
+        ConnectCount++;
+        IsConnected = true;
+        return Task.CompletedTask;
+    }
+
+    public void Disconnect() => IsConnected = false;
 
     public ValueTask WriteStateAsync(
         ControllerState state,

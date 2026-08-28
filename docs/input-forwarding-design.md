@@ -1,5 +1,13 @@
 # Input forwarding design
 
+## Streaming hardening checkpoint
+
+The control transport uses one bidirectional gRPC call whose lifetime owns one daemon control lease. The first client message requests control, the daemon replies only after granting it, and every later client message is a complete canonical controller state. Any stream exit releases and neutralizes that exact lease generation. Cleanup uses a daemon-owned timeout instead of the already-cancelled RPC token.
+
+`IControlSession.SetStateAsync` remains the transport-neutral client API. Its gRPC implementation retains one revisioned latest state, sends ordinary changes at no more than 60 Hz, sends a heartbeat every 500 ms, and lets neutral revisions bypass the cadence. A reconnect always starts with neutral and does not replay state retained by the previous stream generation.
+
+This design was selected over a separate acquire, bind, client-stream, and release protocol. The duplex call gives lease lifetime one owner and one cleanup path. It also returns connection conditions without polling. A separate immediate-state queue was rejected because it could send neutral and then replay an older retained non-neutral state on the next timer tick.
+
 ## Problem
 
 ConsoleControl must forward one selected host input source, either the focused keyboard or one SDL gamepad, without weakening complete controller snapshots or daemon-owned configuration. Mappings are many-to-many. Releasing one host control must not release a canonical control still supplied by another binding. Source changes, focus loss, disconnects, and shutdown must clear stale input.

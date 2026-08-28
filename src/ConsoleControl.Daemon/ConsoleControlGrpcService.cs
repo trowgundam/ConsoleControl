@@ -28,67 +28,98 @@ internal sealed class ConsoleControlGrpcService(ConsoleRuntime runtime, InputPro
             Detail = runtime.BridgeConnected ? "Controller bridge connected" : "Controller bridge disconnected",
         });
 
-    public override async Task<AcquireControlReply> AcquireControl(
-        AcquireControlRequest request,
+    public override async Task Control(
+        IAsyncStreamReader<ControlStreamRequest> requestStream,
+        IServerStreamWriter<ControlStreamEvent> responseStream,
         ServerCallContext context)
     {
-        ClientId client = ParseClient(request.ClientId);
-        DomainPriority priority = request.Priority switch
-        {
-            ContractPriority.Automation => DomainPriority.Automation,
-            ContractPriority.InteractiveUser => DomainPriority.InteractiveUser,
-            _ => throw InvalidArgument("A control priority is required."),
-        };
-
+        ClientId client = default;
+        ControlLease? lease = null;
         try
         {
-            ControlLease lease = await runtime.AcquireControlAsync(
+            if (!await MoveNextWithInactivityTimeoutAsync(requestStream, context.CancellationToken)
+                    .ConfigureAwait(false) ||
+                requestStream.Current.BodyCase != ControlStreamRequest.BodyOneofCase.Open)
+            {
+                throw InvalidArgument("The first control stream message must open the stream.");
+            }
+
+            OpenControlStream open = requestStream.Current.Open;
+            client = ParseClient(open.ClientId);
+            DomainPriority priority = open.Priority switch
+            {
+                ContractPriority.Automation => DomainPriority.Automation,
+                ContractPriority.InteractiveUser => DomainPriority.InteractiveUser,
+                _ => throw InvalidArgument("A control priority is required."),
+            };
+            lease = await runtime.AcquireControlAsync(
                 client,
                 priority,
                 context.CancellationToken).ConfigureAwait(false);
-            return new AcquireControlReply { LeaseGeneration = lease.Generation.Value };
+            await responseStream.WriteAsync(new ControlStreamEvent
+            {
+                Granted = new ControlGranted { LeaseGeneration = lease.Generation.Value },
+            }, context.CancellationToken).ConfigureAwait(false);
+
+            while (await MoveNextWithInactivityTimeoutAsync(requestStream, context.CancellationToken)
+                       .ConfigureAwait(false))
+            {
+                if (requestStream.Current.BodyCase != ControlStreamRequest.BodyOneofCase.State)
+                {
+                    throw InvalidArgument("A control stream may contain only one open message.");
+                }
+                await runtime.SetControllerStateAsync(
+                    client,
+                    lease.Generation,
+                    ParseState(requestStream.Current.State),
+                    context.CancellationToken).ConfigureAwait(false);
+            }
         }
         catch (ControlConflictException exception)
         {
             throw new RpcException(new Status(StatusCode.Aborted, exception.Message));
         }
-    }
-
-    public override async Task<SetControllerStateReply> SetControllerState(
-        SetControllerStateRequest request,
-        ServerCallContext context)
-    {
-        ControllerState state = ParseState(request);
-        try
-        {
-            await runtime.SetControllerStateAsync(
-                ParseClient(request.ClientId),
-                new LeaseGeneration(request.LeaseGeneration),
-                state,
-                context.CancellationToken).ConfigureAwait(false);
-            return new SetControllerStateReply();
-        }
         catch (StaleControlLeaseException exception)
         {
             throw new RpcException(new Status(StatusCode.FailedPrecondition, exception.Message));
         }
-    }
-
-    public override async Task<ReleaseControlReply> ReleaseControl(
-        ReleaseControlRequest request,
-        ServerCallContext context)
-    {
-        try
+        catch (TimeoutException)
         {
-            await runtime.ReleaseControlAsync(
-                ParseClient(request.ClientId),
-                new LeaseGeneration(request.LeaseGeneration),
-                context.CancellationToken).ConfigureAwait(false);
-            return new ReleaseControlReply();
+            throw new RpcException(new Status(StatusCode.DeadlineExceeded,
+                "The control stream stopped sending state heartbeats."));
         }
-        catch (StaleControlLeaseException exception)
+        catch (Exception exception) when (
+            exception is not OperationCanceledException &&
+            lease is not null &&
+            !runtime.BridgeConnected)
         {
-            throw new RpcException(new Status(StatusCode.FailedPrecondition, exception.Message));
+            try
+            {
+                await responseStream.WriteAsync(new ControlStreamEvent
+                {
+                    Condition = ControlCondition.BridgeUnavailable,
+                }, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Stream cleanup below remains authoritative when the client has also gone away.
+            }
+        }
+        finally
+        {
+            if (lease is not null)
+            {
+                using CancellationTokenSource cleanup = new(TimeSpan.FromSeconds(1));
+                try
+                {
+                    await runtime.TryReleaseControlAsync(client, lease.Generation, cleanup.Token)
+                        .ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Firmware independently returns to neutral after its BLE timeout.
+                }
+            }
         }
     }
 
@@ -129,7 +160,14 @@ internal sealed class ConsoleControlGrpcService(ConsoleRuntime runtime, InputPro
             ? new ClientId(parsed)
             : throw InvalidArgument("client_id must be a GUID.");
 
-    private static ControllerState ParseState(SetControllerStateRequest request)
+    private static async Task<bool> MoveNextWithInactivityTimeoutAsync(
+        IAsyncStreamReader<ControlStreamRequest> stream,
+        CancellationToken cancellationToken) =>
+        await stream.MoveNext(cancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(1), cancellationToken)
+            .ConfigureAwait(false);
+
+    private static ControllerState ParseState(ControllerStateMessage request)
     {
         if (request.Buttons > ushort.MaxValue ||
             request.Dpad > (uint)HatPosition.Neutral ||
