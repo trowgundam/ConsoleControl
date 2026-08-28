@@ -1,6 +1,7 @@
 using ConsoleControl.Controller.Bluetooth;
 using ConsoleControl.Core;
 using ConsoleControl.Daemon;
+using System.Collections.Immutable;
 
 AssertEncoding(
     ControllerState.Neutral,
@@ -37,6 +38,95 @@ foreach (HatPosition direction in Enum.GetValues<HatPosition>())
         $"D-pad {direction}");
 }
 
+InputProfile mappingProfile = new(
+    InputProfileKey.Keyboard,
+    "test",
+    [
+        new(new("key.one"), [CanonicalDigitalControl.A, CanonicalDigitalControl.RightShoulder]),
+        new(new("key.two"), [CanonicalDigitalControl.A]),
+        new(new("key.up"), [CanonicalDigitalControl.DPadUp]),
+        new(new("key.right"), [CanonicalDigitalControl.DPadRight]),
+    ],
+    [new(new("axis.x"), new("axis.y"), CanonicalStick.Left,
+        AxisTransform.StickDefault, AxisTransform.StickDefault)],
+    [new(new("axis.trigger"), CanonicalTrigger.Right,
+        AxisTransform.TriggerDefault, 0.5f)]);
+
+ControllerState mapped = InputMapper.Map(mappingProfile, new(
+    [new("key.one"), new("key.two"), new("key.up"), new("key.right")],
+    ImmutableDictionary<HostControlId, float>.Empty
+        .Add(new("axis.x"), 1f)
+        .Add(new("axis.y"), -1f)
+        .Add(new("axis.trigger"), 0.75f)));
+Require(mapped.Buttons.HasFlag(GameButtons.A), "many-to-one mapping omitted A");
+Require(mapped.Buttons.HasFlag(GameButtons.RightShoulder), "one-to-many mapping omitted R");
+Require(mapped.Buttons.HasFlag(GameButtons.RightTrigger), "analog trigger omitted digital ZR");
+Require(mapped.DPad == HatPosition.UpRight, "D-pad diagonal was not composed");
+Require(mapped.LeftStick == new StickPosition(255, 0), "stick transform was not applied");
+Require(mapped.RightTrigger.Value > 128, "analog trigger value was not retained");
+
+ControllerState overlappingRelease = InputMapper.Map(mappingProfile, new(
+    [new("key.two")],
+    ImmutableDictionary<HostControlId, float>.Empty));
+Require(overlappingRelease.Buttons == GameButtons.A,
+    "releasing one of two bindings incorrectly released their shared target");
+
+InputProfile invertedStickProfile = mappingProfile with
+{
+    StickBindings =
+    [
+        new(new("left.x"), new("left.y"), CanonicalStick.Left,
+            AxisTransform.StickDefault, AxisTransform.StickDefault with { Inverted = true }),
+        new(new("right.x"), new("right.y"), CanonicalStick.Right,
+            AxisTransform.StickDefault, AxisTransform.StickDefault with { Inverted = true }),
+    ],
+};
+ControllerState sticksUp = InputMapper.Map(invertedStickProfile, new(
+    [],
+    ImmutableDictionary<HostControlId, float>.Empty
+        .Add(new("left.y"), -1f)
+        .Add(new("right.y"), -1f)));
+Require(sticksUp.LeftStick.Y == byte.MaxValue && sticksUp.RightStick.Y == byte.MaxValue,
+    "inverted Y transforms did not translate upward movement to upward Switch stick values");
+
+string profilePath = Path.Combine(Path.GetTempPath(), $"consolecontrol-profile-{Guid.NewGuid():N}.json");
+try
+{
+    InputProfileStore profileStore = new(profilePath);
+    InputConfiguration initialConfiguration = await profileStore.ReadAsync(CancellationToken.None);
+    Require(initialConfiguration.Revision == 0 && initialConfiguration.Profiles.IsEmpty,
+        "a missing profile file did not produce an empty configuration");
+    InputConfiguration savedConfiguration = await profileStore.SaveAsync(
+        mappingProfile,
+        initialConfiguration.Revision,
+        CancellationToken.None);
+    Require(savedConfiguration.Revision == 1 && savedConfiguration.Profiles.SequenceEqual([mappingProfile]),
+        "profile save did not return the updated configuration");
+    InputConfiguration reloadedConfiguration = await profileStore.ReadAsync(CancellationToken.None);
+    Require(reloadedConfiguration.Revision == 1
+        && reloadedConfiguration.Profiles.Length == 1
+        && reloadedConfiguration.Profiles[0].Key == mappingProfile.Key
+        && reloadedConfiguration.Profiles[0].DigitalBindings.Length == mappingProfile.DigitalBindings.Length
+        && reloadedConfiguration.Profiles[0].StickBindings.Length == mappingProfile.StickBindings.Length
+        && reloadedConfiguration.Profiles[0].TriggerBindings.Length == mappingProfile.TriggerBindings.Length,
+        "profile persistence did not round-trip through JSON");
+    try
+    {
+        await profileStore.SaveAsync(mappingProfile, 0, CancellationToken.None);
+        throw new InvalidOperationException("a stale profile revision was accepted");
+    }
+    catch (InputConfigurationConflictException)
+    {
+    }
+}
+finally
+{
+    if (File.Exists(profilePath))
+    {
+        File.Delete(profilePath);
+    }
+}
+
 FakeControllerOutput output = new();
 await using ConsoleRuntime runtime = new(output);
 ClientId owner = new(Guid.Parse("11111111-1111-1111-1111-111111111111"));
@@ -67,6 +157,8 @@ Require(output.States.SequenceEqual([pressed, ControllerState.Neutral]),
 Console.WriteLine("controller encoding: passed");
 Console.WriteLine("lease generation: passed");
 Console.WriteLine("neutral on release: passed");
+Console.WriteLine("input mapping: passed");
+Console.WriteLine("input profile persistence: passed");
 
 static void AssertEncoding(ControllerState state, byte[] expected, string name)
 {

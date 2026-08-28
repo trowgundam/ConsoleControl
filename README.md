@@ -2,7 +2,7 @@
 
 ConsoleControl lets a local desktop application control a game console through a small controller bridge. The first target is a docked Nintendo Switch 2 connected through a NanoKVM-USB.
 
-The controller hardware proof has passed. The current desktop slice has daemon-backed Avalonia controls for the Switch's face buttons, D-pad, shoulders, triggers, and system buttons. Video capture and general controller input remain later work.
+The controller hardware proof has passed. The current desktop slice has daemon-backed Avalonia controls plus focused keyboard and SDL gamepad forwarding. Video capture remains later work.
 
 ## First release
 
@@ -95,7 +95,13 @@ dotnet run --project src/ConsoleControl.Gui -- \
   --daemon http://127.0.0.1:5041
 ```
 
-The GUI reports `Ready` after the daemon connects to the bridge and grants control. Each on-screen control sends a complete pressed state for 80 ms, then sends neutral. This temporary slice uses explicit process startup, a fixed bridge address, and an unauthenticated loopback endpoint.
+The GUI reports `Ready` after the daemon connects to the bridge and grants control. Choose Keyboard or one connected gamepad from the input-source list. Only the selected source sends input. Switching sources, losing keyboard focus, or disconnecting the selected gamepad clears its input before another source can take over.
+
+The default keyboard mapping uses the arrow keys for the D-pad, `X/Z/S/A` for `A/B/X/Y`, `Q/E` for `L/R`, `1/3` for `ZL/ZR`, Tab and Enter for Minus and Plus, and `H/C` for Home and Capture. SDL gamepads use their standard positional layout, sticks, shoulders, and triggers.
+
+Choose **Configure input mapping…** to open the modal mapping window. Click a Switch button, then press a key, gamepad button, or trigger on the selected host input source. Use **L STICK** or **R STICK**, then move a host stick, to bind its paired axes. Repeat button capture to assign several host controls to the same Switch control. One host control can also be captured for several Switch controls. Select a displayed button or trigger binding to remove it, then save the profile. Profiles are stored by keyboard identity or SDL device GUID, so equivalent controllers reuse the same profile. The daemon persists profiles in its per-user application-data directory. Stick dead zones, inversion, and scaling are represented in each profile; detailed transform editing is not yet exposed in the GUI.
+
+On-screen controls remain available with either forwarded source. Each click adds an 80 ms overlay without releasing buttons or axes held by the selected source. This temporary slice still uses explicit process startup, a fixed bridge address, and an unauthenticated loopback endpoint.
 
 Run the repeatable desktop checks with:
 

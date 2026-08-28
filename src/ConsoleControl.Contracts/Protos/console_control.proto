@@ -9,6 +9,8 @@ service ConsoleControlService {
   rpc AcquireControl (AcquireControlRequest) returns (AcquireControlReply);
   rpc SetControllerState (SetControllerStateRequest) returns (SetControllerStateReply);
   rpc ReleaseControl (ReleaseControlRequest) returns (ReleaseControlReply);
+  rpc GetInputConfiguration (GetInputConfigurationRequest) returns (InputConfigurationReply);
+  rpc SaveInputProfile (SaveInputProfileRequest) returns (InputConfigurationReply);
 }
 
 message GetStatusRequest {}
@@ -49,6 +51,91 @@ message ReleaseControlRequest {
 }
 
 message ReleaseControlReply {}
+
+message GetInputConfigurationRequest {}
+
+message SaveInputProfileRequest {
+  uint64 expected_revision = 1;
+  InputProfileMessage profile = 2;
+}
+
+message InputConfigurationReply {
+  uint64 revision = 1;
+  repeated InputProfileMessage profiles = 2;
+}
+
+message InputProfileMessage {
+  InputSourceKind source_kind = 1;
+  string hardware_id = 2;
+  string name = 3;
+  repeated DigitalBindingMessage digital_bindings = 4;
+  repeated StickBindingMessage stick_bindings = 5;
+  repeated TriggerBindingMessage trigger_bindings = 6;
+}
+
+message DigitalBindingMessage {
+  string source = 1;
+  repeated CanonicalDigitalControl targets = 2;
+}
+
+message StickBindingMessage {
+  string x_source = 1;
+  string y_source = 2;
+  CanonicalStick target = 3;
+  AxisTransformMessage x_transform = 4;
+  AxisTransformMessage y_transform = 5;
+}
+
+message TriggerBindingMessage {
+  string source = 1;
+  CanonicalTrigger target = 2;
+  AxisTransformMessage transform = 3;
+  float digital_threshold = 4;
+}
+
+message AxisTransformMessage {
+  float dead_zone = 1;
+  bool inverted = 2;
+  float scale = 3;
+}
+
+enum InputSourceKind {
+  INPUT_SOURCE_KIND_UNSPECIFIED = 0;
+  INPUT_SOURCE_KIND_KEYBOARD = 1;
+  INPUT_SOURCE_KIND_GAMEPAD = 2;
+}
+
+enum CanonicalDigitalControl {
+  CANONICAL_DIGITAL_CONTROL_UNSPECIFIED = 0;
+  CANONICAL_DIGITAL_CONTROL_A = 1;
+  CANONICAL_DIGITAL_CONTROL_B = 2;
+  CANONICAL_DIGITAL_CONTROL_X = 3;
+  CANONICAL_DIGITAL_CONTROL_Y = 4;
+  CANONICAL_DIGITAL_CONTROL_LEFT_SHOULDER = 5;
+  CANONICAL_DIGITAL_CONTROL_RIGHT_SHOULDER = 6;
+  CANONICAL_DIGITAL_CONTROL_LEFT_TRIGGER = 7;
+  CANONICAL_DIGITAL_CONTROL_RIGHT_TRIGGER = 8;
+  CANONICAL_DIGITAL_CONTROL_MINUS = 9;
+  CANONICAL_DIGITAL_CONTROL_PLUS = 10;
+  CANONICAL_DIGITAL_CONTROL_HOME = 11;
+  CANONICAL_DIGITAL_CONTROL_CAPTURE = 12;
+  CANONICAL_DIGITAL_CONTROL_DPAD_UP = 13;
+  CANONICAL_DIGITAL_CONTROL_DPAD_RIGHT = 14;
+  CANONICAL_DIGITAL_CONTROL_DPAD_DOWN = 15;
+  CANONICAL_DIGITAL_CONTROL_DPAD_LEFT = 16;
+}
+
+enum CanonicalStick {
+  CANONICAL_STICK_UNSPECIFIED = 0;
+  CANONICAL_STICK_LEFT = 1;
+  CANONICAL_STICK_RIGHT = 2;
+}
+
+enum CanonicalTrigger {
+  CANONICAL_TRIGGER_UNSPECIFIED = 0;
+  CANONICAL_TRIGGER_LEFT = 1;
+  CANONICAL_TRIGGER_RIGHT = 2;
+}
 
 enum ControlPriority {
   CONTROL_PRIORITY_UNSPECIFIED = 0;

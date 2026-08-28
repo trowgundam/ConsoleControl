@@ -9,7 +9,10 @@
   <ItemGroup>
     <ProjectReference Include="../ConsoleControl.Client/ConsoleControl.Client.csproj" />
     <ProjectReference Include="../ConsoleControl.Core/ConsoleControl.Core.csproj" />
+    <ProjectReference Include="../ConsoleControl.Input.Sdl/ConsoleControl.Input.Sdl.csproj" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+    <PackageReference Include="SDL3-CS" Version="3.4.14.1" />
+    <PackageReference Include="SDL3-CS.Linux" Version="3.4.14.1" />
   </ItemGroup>
 </Project>

@@ -14,6 +14,7 @@ BluezControllerOutput controllerOutput = new(options.Adapter, options.BridgeAddr
 await controllerOutput.ConnectAsync(CancellationToken.None);
 builder.Services.AddSingleton<IControllerOutput>(controllerOutput);
 builder.Services.AddSingleton<ConsoleRuntime>();
+builder.Services.AddSingleton<InputProfileStore>();
 
 WebApplication app = builder.Build();
 app.MapGrpcService<ConsoleControlGrpcService>();

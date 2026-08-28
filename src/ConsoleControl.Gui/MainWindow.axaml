@@ -4,11 +4,12 @@
     xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:ConsoleControl.Gui"
+    xmlns:core="using:ConsoleControl.Core"
     Title="ConsoleControl"
     Width="720"
-    Height="500"
+    Height="560"
     MinWidth="640"
-    MinHeight="440"
+    MinHeight="500"
     WindowStartupLocation="CenterScreen">
   <Window.Styles>
     <Style Selector="Button.controller">
@@ -32,65 +33,78 @@
     </Style>
   </Window.Styles>
 
-  <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="24" RowSpacing="16">
+  <Grid RowDefinitions="Auto,Auto,Auto,*,Auto,Auto" Margin="24" RowSpacing="12">
     <TextBlock
         Grid.Row="0"
         Text="Switch controller"
         FontSize="24"
         FontWeight="SemiBold" />
 
-    <Grid Grid.Row="1" ColumnDefinitions="*,*,64,64,*,*" ColumnSpacing="8">
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12">
+      <TextBlock Text="Input source" VerticalAlignment="Center" />
+      <ComboBox Width="300"
+                ItemsSource="{Binding InputSources}"
+                SelectedItem="{Binding SelectedInputSource, Mode=TwoWay}">
+        <ComboBox.ItemTemplate>
+          <DataTemplate x:DataType="local:InputSourceOption">
+            <TextBlock Text="{Binding DisplayName}" />
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
+    </StackPanel>
+
+    <Grid Grid.Row="2" ColumnDefinitions="*,*,64,64,*,*" ColumnSpacing="8">
       <Button Grid.Column="0" Classes="controller" Content="ZL"
               Command="{Binding PulseControlCommand}"
-              CommandParameter="{x:Static local:DigitalControl.ZL}" />
+              CommandParameter="{x:Static core:CanonicalDigitalControl.LeftTrigger}" />
       <Button Grid.Column="1" Classes="controller" Content="L"
               Command="{Binding PulseControlCommand}"
-              CommandParameter="{x:Static local:DigitalControl.L}" />
+              CommandParameter="{x:Static core:CanonicalDigitalControl.LeftShoulder}" />
       <Button Grid.Column="2" Classes="controller system" Content="−"
               Command="{Binding PulseControlCommand}"
-              CommandParameter="{x:Static local:DigitalControl.Minus}" />
+              CommandParameter="{x:Static core:CanonicalDigitalControl.Minus}" />
       <Button Grid.Column="3" Classes="controller system" Content="+"
               Command="{Binding PulseControlCommand}"
-              CommandParameter="{x:Static local:DigitalControl.Plus}" />
+              CommandParameter="{x:Static core:CanonicalDigitalControl.Plus}" />
       <Button Grid.Column="4" Classes="controller" Content="R"
               HorizontalAlignment="Right"
               Command="{Binding PulseControlCommand}"
-              CommandParameter="{x:Static local:DigitalControl.R}" />
+              CommandParameter="{x:Static core:CanonicalDigitalControl.RightShoulder}" />
       <Button Grid.Column="5" Classes="controller" Content="ZR"
               HorizontalAlignment="Right"
               Command="{Binding PulseControlCommand}"
-              CommandParameter="{x:Static local:DigitalControl.ZR}" />
+              CommandParameter="{x:Static core:CanonicalDigitalControl.RightTrigger}" />
     </Grid>
 
-    <Grid Grid.Row="2" ColumnDefinitions="1*,1.2*,1*" VerticalAlignment="Center">
+    <Grid Grid.Row="3" ColumnDefinitions="1*,1.2*,1*" VerticalAlignment="Center">
       <Grid Grid.Column="0" Width="180" Height="180"
             RowDefinitions="60,60,60" ColumnDefinitions="60,60,60"
             HorizontalAlignment="Center">
         <Button Grid.Row="0" Grid.Column="1" Classes="controller" Content="▲"
                 Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static local:DigitalControl.DPadUp}" />
+                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadUp}" />
         <Button Grid.Row="1" Grid.Column="0" Classes="controller" Content="◀"
                 Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static local:DigitalControl.DPadLeft}" />
+                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadLeft}" />
         <Border Grid.Row="1" Grid.Column="1" Width="56" Height="48"
                 Background="{DynamicResource SystemControlBackgroundBaseLowBrush}" />
         <Button Grid.Row="1" Grid.Column="2" Classes="controller" Content="▶"
                 Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static local:DigitalControl.DPadRight}" />
+                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadRight}" />
         <Button Grid.Row="2" Grid.Column="1" Classes="controller" Content="▼"
                 Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static local:DigitalControl.DPadDown}" />
+                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadDown}" />
       </Grid>
 
       <StackPanel Grid.Column="1" HorizontalAlignment="Center" Spacing="14">
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
           <Button Classes="controller system" Content="CAP"
                   Command="{Binding PulseControlCommand}"
-                  CommandParameter="{x:Static local:DigitalControl.Capture}" />
+                  CommandParameter="{x:Static core:CanonicalDigitalControl.Capture}" />
           <Button Classes="controller system" Content="HOME"
                   Width="68"
                   Command="{Binding PulseControlCommand}"
-                  CommandParameter="{x:Static local:DigitalControl.Home}" />
+                  CommandParameter="{x:Static core:CanonicalDigitalControl.Home}" />
         </StackPanel>
         <TextBlock Text="Each click sends an 80 ms press"
                    Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
@@ -102,20 +116,25 @@
             HorizontalAlignment="Center">
         <Button Grid.Row="0" Grid.Column="1" Classes="controller face" Content="X"
                 Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static local:DigitalControl.X}" />
+                CommandParameter="{x:Static core:CanonicalDigitalControl.X}" />
         <Button Grid.Row="1" Grid.Column="0" Classes="controller face" Content="Y"
                 Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static local:DigitalControl.Y}" />
+                CommandParameter="{x:Static core:CanonicalDigitalControl.Y}" />
         <Button Grid.Row="1" Grid.Column="2" Classes="controller face" Content="A"
                 Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static local:DigitalControl.A}" />
+                CommandParameter="{x:Static core:CanonicalDigitalControl.A}" />
         <Button Grid.Row="2" Grid.Column="1" Classes="controller face" Content="B"
                 Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static local:DigitalControl.B}" />
+                CommandParameter="{x:Static core:CanonicalDigitalControl.B}" />
       </Grid>
     </Grid>
 
-    <TextBlock Grid.Row="3"
+    <Button Grid.Row="4"
+            HorizontalAlignment="Center"
+            Content="Configure input mapping…"
+            Click="OpenMapping_Click" />
+
+    <TextBlock Grid.Row="5"
         HorizontalAlignment="Center"
         Text="{Binding StatusText}"
         TextWrapping="Wrap" />

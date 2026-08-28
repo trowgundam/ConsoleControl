@@ -18,8 +18,6 @@ public sealed partial class App : Application
             GrpcConsoleSession session = GrpcConsoleSession.Connect(Program.DaemonUri);
             _viewModel = new MainWindowViewModel(session);
             desktop.MainWindow = new MainWindow { DataContext = _viewModel };
-            desktop.Exit += (_, _) =>
-                _viewModel.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
 
         base.OnFrameworkInitializationCompleted();

@@ -1,9 +1,18 @@
+using System.Collections.Immutable;
 using ConsoleControl.Contracts;
 using ConsoleControl.Core;
 using Grpc.Core;
 using Grpc.Net.Client;
 using ContractPriority = ConsoleControl.Contracts.ControlPriority;
 using DomainPriority = ConsoleControl.Core.ControlPriority;
+using ContractDigital = ConsoleControl.Contracts.CanonicalDigitalControl;
+using DomainDigital = ConsoleControl.Core.CanonicalDigitalControl;
+using ContractSourceKind = ConsoleControl.Contracts.InputSourceKind;
+using DomainSourceKind = ConsoleControl.Core.InputSourceKind;
+using ContractStick = ConsoleControl.Contracts.CanonicalStick;
+using DomainStick = ConsoleControl.Core.CanonicalStick;
+using ContractTrigger = ConsoleControl.Contracts.CanonicalTrigger;
+using DomainTrigger = ConsoleControl.Core.CanonicalTrigger;
 
 namespace ConsoleControl.Client;
 
@@ -35,6 +44,33 @@ public sealed class GrpcConsoleSession : IConsoleSession
             new GetStatusRequest(),
             cancellationToken: cancellationToken);
         return new ConsoleStatus(reply.BridgeConnected, reply.ControlAvailable, reply.Detail);
+    }
+
+    public async Task<InputConfiguration> GetInputConfigurationAsync(
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        InputConfigurationReply reply = await _client.GetInputConfigurationAsync(
+            new GetInputConfigurationRequest(),
+            cancellationToken: cancellationToken);
+        return ParseConfiguration(reply);
+    }
+
+    public async Task<InputConfiguration> SaveInputProfileAsync(
+        InputProfile profile,
+        ulong expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        profile.Validate();
+        InputConfigurationReply reply = await _client.SaveInputProfileAsync(
+            new SaveInputProfileRequest
+            {
+                ExpectedRevision = expectedRevision,
+                Profile = ToMessage(profile),
+            },
+            cancellationToken: cancellationToken);
+        return ParseConfiguration(reply);
     }
 
     public async Task<IControlSession> TakeControlAsync(
@@ -92,6 +128,69 @@ public sealed class GrpcConsoleSession : IConsoleSession
             _control = null;
         }
     }
+
+    private static InputConfiguration ParseConfiguration(InputConfigurationReply reply) =>
+        new(reply.Revision, reply.Profiles.Select(ParseProfile).ToImmutableArray());
+
+    private static InputProfile ParseProfile(InputProfileMessage message) => new InputProfile(
+        new((DomainSourceKind)message.SourceKind, message.HardwareId),
+        message.Name,
+        message.DigitalBindings.Select(binding => new DigitalBinding(
+            new(binding.Source),
+            binding.Targets.Select(target => (DomainDigital)target).ToImmutableArray())).ToImmutableArray(),
+        message.StickBindings.Select(binding => new StickBinding(
+            new(binding.XSource),
+            new(binding.YSource),
+            (DomainStick)binding.Target,
+            ParseTransform(binding.XTransform),
+            ParseTransform(binding.YTransform))).ToImmutableArray(),
+        message.TriggerBindings.Select(binding => new TriggerBinding(
+            new(binding.Source),
+            (DomainTrigger)binding.Target,
+            ParseTransform(binding.Transform),
+            binding.DigitalThreshold)).ToImmutableArray()).Validate();
+
+    private static AxisTransform ParseTransform(AxisTransformMessage message) =>
+        new(message.DeadZone, message.Inverted, message.Scale);
+
+    private static InputProfileMessage ToMessage(InputProfile profile)
+    {
+        InputProfileMessage message = new()
+        {
+            SourceKind = (ContractSourceKind)profile.Key.Kind,
+            HardwareId = profile.Key.HardwareId,
+            Name = profile.Name,
+        };
+        message.DigitalBindings.AddRange(profile.DigitalBindings.Select(binding =>
+        {
+            DigitalBindingMessage result = new() { Source = binding.Source.Value };
+            result.Targets.AddRange(binding.Targets.Select(target => (ContractDigital)target));
+            return result;
+        }));
+        message.StickBindings.AddRange(profile.StickBindings.Select(binding => new StickBindingMessage
+        {
+            XSource = binding.XSource.Value,
+            YSource = binding.YSource.Value,
+            Target = (ContractStick)binding.Target,
+            XTransform = ToMessage(binding.XTransform),
+            YTransform = ToMessage(binding.YTransform),
+        }));
+        message.TriggerBindings.AddRange(profile.TriggerBindings.Select(binding => new TriggerBindingMessage
+        {
+            Source = binding.Source.Value,
+            Target = (ContractTrigger)binding.Target,
+            Transform = ToMessage(binding.Transform),
+            DigitalThreshold = binding.DigitalThreshold,
+        }));
+        return message;
+    }
+
+    private static AxisTransformMessage ToMessage(AxisTransform transform) => new()
+    {
+        DeadZone = transform.DeadZone,
+        Inverted = transform.Inverted,
+        Scale = transform.Scale,
+    };
 
     private sealed class GrpcControlSession(
         ConsoleControlService.ConsoleControlServiceClient client,

@@ -6,6 +6,7 @@
     <Project Path="src/ConsoleControl.Core/ConsoleControl.Core.csproj" />
     <Project Path="src/ConsoleControl.Daemon/ConsoleControl.Daemon.csproj" />
     <Project Path="src/ConsoleControl.Gui/ConsoleControl.Gui.csproj" />
+    <Project Path="src/ConsoleControl.Input.Sdl/ConsoleControl.Input.Sdl.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ConsoleControl.IntegrationTests/ConsoleControl.IntegrationTests.csproj" />

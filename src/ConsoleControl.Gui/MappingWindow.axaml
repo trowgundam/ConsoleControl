@@ -1,0 +1,114 @@
+<Window
+    x:Class="ConsoleControl.Gui.MappingWindow"
+    x:DataType="local:MappingWindowViewModel"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:ConsoleControl.Gui"
+    xmlns:core="using:ConsoleControl.Core"
+    Title="Configure input mapping"
+    Width="760"
+    Height="600"
+    MinWidth="700"
+    MinHeight="560"
+    WindowStartupLocation="CenterOwner"
+    CanResize="True">
+  <Window.Styles>
+    <Style Selector="Button.map">
+      <Setter Property="Width" Value="72" />
+      <Setter Property="Height" Value="54" />
+      <Setter Property="FontSize" Value="17" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.face">
+      <Setter Property="Width" Value="68" />
+      <Setter Property="Height" Value="68" />
+      <Setter Property="CornerRadius" Value="34" />
+      <Setter Property="FontSize" Value="22" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Margin="24" RowSpacing="14">
+    <StackPanel Grid.Row="0" Spacing="4">
+      <TextBlock Text="Map host controls" FontSize="24" FontWeight="SemiBold" />
+      <TextBlock Text="{Binding ProfileName}" FontSize="15" />
+      <TextBlock Text="Click a Switch control, then press a button or move a stick or trigger. Repeat to add another button binding." TextWrapping="Wrap" />
+    </StackPanel>
+
+    <Grid Grid.Row="1" ColumnDefinitions="*,*,80,80,*,*" ColumnSpacing="8">
+      <Button Grid.Column="0" Classes="map" Content="ZL" Command="{Binding CaptureCommand}"
+              CommandParameter="{x:Static core:CanonicalDigitalControl.LeftTrigger}" />
+      <Button Grid.Column="1" Classes="map" Content="L" Command="{Binding CaptureCommand}"
+              CommandParameter="{x:Static core:CanonicalDigitalControl.LeftShoulder}" />
+      <Button Grid.Column="2" Classes="map" Content="−" Command="{Binding CaptureCommand}"
+              CommandParameter="{x:Static core:CanonicalDigitalControl.Minus}" />
+      <Button Grid.Column="3" Classes="map" Content="+" Command="{Binding CaptureCommand}"
+              CommandParameter="{x:Static core:CanonicalDigitalControl.Plus}" />
+      <Button Grid.Column="4" Classes="map" Content="R" HorizontalAlignment="Right" Command="{Binding CaptureCommand}"
+              CommandParameter="{x:Static core:CanonicalDigitalControl.RightShoulder}" />
+      <Button Grid.Column="5" Classes="map" Content="ZR" HorizontalAlignment="Right" Command="{Binding CaptureCommand}"
+              CommandParameter="{x:Static core:CanonicalDigitalControl.RightTrigger}" />
+    </Grid>
+
+    <Grid Grid.Row="2" ColumnDefinitions="1*,1.2*,1*" VerticalAlignment="Center">
+      <Grid Grid.Column="0" Width="192" Height="192" RowDefinitions="64,64,64" ColumnDefinitions="64,64,64">
+        <Button Grid.Row="0" Grid.Column="1" Classes="map" Content="▲" Command="{Binding CaptureCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadUp}" />
+        <Button Grid.Row="1" Grid.Column="0" Classes="map" Content="◀" Command="{Binding CaptureCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadLeft}" />
+        <Border Grid.Row="1" Grid.Column="1" Width="58" Height="50"
+                Background="{DynamicResource SystemControlBackgroundBaseLowBrush}" />
+        <Button Grid.Row="1" Grid.Column="2" Classes="map" Content="▶" Command="{Binding CaptureCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadRight}" />
+        <Button Grid.Row="2" Grid.Column="1" Classes="map" Content="▼" Command="{Binding CaptureCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadDown}" />
+      </Grid>
+
+      <StackPanel Grid.Column="1" Spacing="12" HorizontalAlignment="Stretch">
+        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+          <Button Classes="map" Content="L STICK" Command="{Binding CaptureStickCommand}"
+                  CommandParameter="{x:Static core:CanonicalStick.Left}" />
+          <Button Classes="map" Content="R STICK" Command="{Binding CaptureStickCommand}"
+                  CommandParameter="{x:Static core:CanonicalStick.Right}" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+          <Button Classes="map" Content="CAP" Command="{Binding CaptureCommand}"
+                  CommandParameter="{x:Static core:CanonicalDigitalControl.Capture}" />
+          <Button Classes="map" Content="HOME" Command="{Binding CaptureCommand}"
+                  CommandParameter="{x:Static core:CanonicalDigitalControl.Home}" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="4">
+          <TextBlock Text="Bindings for" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding SelectedTargetLabel}" FontWeight="SemiBold" />
+        </StackPanel>
+        <ListBox Height="120" ItemsSource="{Binding CurrentBindings}"
+                 SelectedItem="{Binding SelectedBinding, Mode=TwoWay}">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="local:MappingBindingRow">
+              <TextBlock Text="{Binding DisplayName}" />
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+        <Button Content="Remove selected binding" Command="{Binding RemoveBindingCommand}" />
+      </StackPanel>
+
+      <Grid Grid.Column="2" Width="204" Height="204" RowDefinitions="68,68,68" ColumnDefinitions="68,68,68">
+        <Button Grid.Row="0" Grid.Column="1" Classes="map face" Content="X" Command="{Binding CaptureCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.X}" />
+        <Button Grid.Row="1" Grid.Column="0" Classes="map face" Content="Y" Command="{Binding CaptureCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.Y}" />
+        <Button Grid.Row="1" Grid.Column="2" Classes="map face" Content="A" Command="{Binding CaptureCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.A}" />
+        <Button Grid.Row="2" Grid.Column="1" Classes="map face" Content="B" Command="{Binding CaptureCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.B}" />
+      </Grid>
+    </Grid>
+
+    <TextBlock Grid.Row="3" Text="{Binding StatusText}" TextWrapping="Wrap" HorizontalAlignment="Center" />
+
+    <Grid Grid.Row="4" ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+      <Button Grid.Column="0" Content="Reset to defaults" Command="{Binding ResetCommand}" />
+      <Button Grid.Column="2" Content="Cancel" Click="Cancel_Click" />
+      <Button Grid.Column="3" Content="Save" Click="Save_Click" />
+    </Grid>
+  </Grid>
+</Window>
