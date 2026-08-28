@@ -11,6 +11,7 @@
     <ProjectReference Include="../../src/ConsoleControl.Contracts/ConsoleControl.Contracts.csproj" />
     <ProjectReference Include="../../src/ConsoleControl.Core/ConsoleControl.Core.csproj" />
     <ProjectReference Include="../../src/ConsoleControl.Daemon/ConsoleControl.Daemon.csproj" />
+    <ProjectReference Include="../../src/ConsoleControl.Video.FFmpeg/ConsoleControl.Video.FFmpeg.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

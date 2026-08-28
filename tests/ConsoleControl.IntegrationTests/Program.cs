@@ -3,6 +3,19 @@ using ConsoleControl.Core;
 using ConsoleControl.Daemon;
 using System.Collections.Immutable;
 
+if (args is ["verify-mjpeg", string multipartPath])
+{
+    await VideoRuntimeChecks.VerifyMultipartFileAsync(multipartPath, 2);
+    Console.WriteLine("multipart JPEG reader: passed");
+    return;
+}
+
+if (args is ["video-latency", string daemonUri, string streamUri])
+{
+    await VideoLatencyProbe.RunAsync(new Uri(daemonUri), new Uri(streamUri));
+    return;
+}
+
 AssertEncoding(
     ControllerState.Neutral,
     [0x00, 0x00, 0x08, 0x80, 0x80, 0x80, 0x80, 0x00],
@@ -128,6 +141,8 @@ finally
 }
 
 await StreamingTransportChecks.RunAsync();
+VideoRuntimeChecks.VerifyJpegDimensions();
+await VideoRuntimeChecks.RunAsync();
 
 FakeControllerOutput output = new();
 await using ConsoleRuntime runtime = new(output);
@@ -168,6 +183,8 @@ Console.WriteLine("neutral on release: passed");
 Console.WriteLine("input mapping: passed");
 Console.WriteLine("input profile persistence: passed");
 Console.WriteLine("streaming transport: passed");
+Console.WriteLine("video runtime: passed");
+Console.WriteLine("JPEG dimensions: passed");
 
 static void AssertEncoding(ControllerState state, byte[] expected, string name)
 {

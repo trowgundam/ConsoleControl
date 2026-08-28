@@ -9,6 +9,41 @@ service ConsoleControlService {
   rpc Control (stream ControlStreamRequest) returns (stream ControlStreamEvent);
   rpc GetInputConfiguration (GetInputConfigurationRequest) returns (InputConfigurationReply);
   rpc SaveInputProfile (SaveInputProfileRequest) returns (InputConfigurationReply);
+  rpc GetVideoInventory (GetVideoInventoryRequest) returns (VideoInventoryReply);
+  rpc SelectVideoSource (SelectVideoSourceRequest) returns (VideoSelectionReply);
+}
+
+message GetVideoInventoryRequest {}
+
+message VideoModeMessage {
+  uint32 width = 1;
+  uint32 height = 2;
+  uint32 frames_per_second = 3;
+}
+
+message VideoSourceMessage {
+  string id = 1;
+  string display_name = 2;
+  VideoModeMessage preferred_mode = 3;
+}
+
+message VideoInventoryReply {
+  repeated VideoSourceMessage sources = 1;
+  optional string selected_source_id = 2;
+  uint64 revision = 3;
+  string live_stream_uri = 4;
+  string status = 5;
+}
+
+message SelectVideoSourceRequest {
+  string source_id = 1;
+  uint64 expected_revision = 2;
+}
+
+message VideoSelectionReply {
+  string source_id = 1;
+  uint64 revision = 2;
+  string status = 3;
 }
 
 message GetStatusRequest {}

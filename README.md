@@ -72,9 +72,9 @@ The daemon presents a narrow client API over gRPC on loopback TCP. Generated pro
 
 The GUI starts the daemon when no compatible instance is available. The daemon publishes its URI, process ID, protocol version, instance nonce, and per-launch bearer secret in a user-only runtime file. The endpoint component owns publication and channel creation. It does not prebuild Unix socket or Windows named-pipe implementations.
 
-FFmpeg handles UVC format negotiation and decoding behind a capture interface. Development initially requires a system FFmpeg installation. The choice between an FFmpeg child process and native bindings remains open until the video latency proof measures the simpler route.
+The daemon runs FFmpeg as a child process behind `IVideoCaptureAdapter`. Development requires `ffmpeg` and `v4l2-ctl` on `PATH`. FFmpeg reads MJPEG from the selected V4L2 device and copies the compressed frames without transcoding.
 
-Every live-video subscriber has room for one pending frame. Slow clients lose stale frames instead of adding latency. The daemon retains the latest full-resolution decoded frame separately so a later MCP server can request a screenshot without joining the live stream.
+The daemon publishes live video as multipart MJPEG over a separate loopback HTTP port. gRPC manages source discovery and selection. The daemon retains only the latest compressed frame, so a slow viewer misses stale frames without blocking capture. The Avalonia client also keeps only one encoded frame waiting for decode.
 
 See [the architecture](docs/architecture.md), [the domain language](CONTEXT.md), and [the architecture decisions](docs/adr/) for the detailed boundaries and rationale.
 
@@ -85,6 +85,7 @@ Connect the flashed controller bridge to the Switch dock. Start the daemon:
 ```sh
 dotnet run --project src/ConsoleControl.Daemon -- \
   --listen http://127.0.0.1:5041 \
+  --video-listen http://127.0.0.1:5042 \
   --bridge F6:D5:24:56:6F:E2
 ```
 
@@ -94,6 +95,8 @@ In another terminal, start the GUI:
 dotnet run --project src/ConsoleControl.Gui -- \
   --daemon http://127.0.0.1:5041
 ```
+
+The GUI lists MJPEG V4L2 capture devices by their stable `/dev/v4l/by-id` names. Choose a device from **Video source**. The daemon remembers the selection and opens its best MJPEG mode up to 1920x1080 at 60 fps.
 
 The GUI reports `Ready` after the daemon connects to the bridge and grants control. Choose Keyboard or one connected gamepad from the input-source list. Only the selected source sends input. Switching sources, losing keyboard focus, or disconnecting the selected gamepad clears its input before another source can take over.
 
@@ -109,6 +112,12 @@ Run the repeatable desktop checks with:
 
 ```sh
 tools/verify-desktop-slice.sh
+```
+
+With the daemon and GUI running, sample video delivery and process memory for ten minutes:
+
+```sh
+tools/verify-video-stability.sh 10
 ```
 
 ## Planned repository layout

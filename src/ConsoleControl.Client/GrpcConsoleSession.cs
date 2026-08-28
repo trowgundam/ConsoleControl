@@ -74,6 +74,31 @@ public sealed class GrpcConsoleSession : IConsoleSession
         return ParseConfiguration(reply);
     }
 
+    public async Task<VideoInventory> GetVideoInventoryAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        VideoInventoryReply reply = await _client.GetVideoInventoryAsync(
+            new GetVideoInventoryRequest(),
+            cancellationToken: cancellationToken);
+        return ParseVideoInventory(reply);
+    }
+
+    public async Task<VideoSelection> SelectVideoSourceAsync(
+        VideoSourceId sourceId,
+        ulong expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        VideoSelectionReply reply = await _client.SelectVideoSourceAsync(
+            new SelectVideoSourceRequest
+            {
+                SourceId = sourceId.Value,
+                ExpectedRevision = expectedRevision,
+            },
+            cancellationToken: cancellationToken);
+        return new(new(reply.SourceId), reply.Revision, reply.Status);
+    }
+
     public async Task<IControlSession> TakeControlAsync(
         DomainPriority priority,
         CancellationToken cancellationToken)
@@ -120,6 +145,20 @@ public sealed class GrpcConsoleSession : IConsoleSession
 
     private static InputConfiguration ParseConfiguration(InputConfigurationReply reply) =>
         new(reply.Revision, reply.Profiles.Select(ParseProfile).ToImmutableArray());
+
+    private static VideoInventory ParseVideoInventory(VideoInventoryReply reply) => new(
+        reply.Sources.Select(source => new VideoSource(
+            new(source.Id),
+            source.DisplayName,
+            new(
+                checked((ushort)source.PreferredMode.Width),
+                checked((ushort)source.PreferredMode.Height),
+                checked((ushort)source.PreferredMode.FramesPerSecond))))
+            .ToImmutableArray(),
+        reply.HasSelectedSourceId ? new VideoSourceId(reply.SelectedSourceId) : null,
+        reply.Revision,
+        new Uri(reply.LiveStreamUri, UriKind.Absolute),
+        reply.Status);
 
     private static InputProfile ParseProfile(InputProfileMessage message) => new InputProfile(
         new((DomainSourceKind)message.SourceKind, message.HardwareId),

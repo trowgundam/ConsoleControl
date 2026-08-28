@@ -18,6 +18,13 @@ public interface IConsoleSession : IAsyncDisposable
         ulong expectedRevision,
         CancellationToken cancellationToken);
 
+    Task<VideoInventory> GetVideoInventoryAsync(CancellationToken cancellationToken);
+
+    Task<VideoSelection> SelectVideoSourceAsync(
+        VideoSourceId sourceId,
+        ulong expectedRevision,
+        CancellationToken cancellationToken);
+
     Task<IControlSession> TakeControlAsync(
         ControlPriority priority,
         CancellationToken cancellationToken);

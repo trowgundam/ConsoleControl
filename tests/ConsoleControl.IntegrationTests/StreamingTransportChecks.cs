@@ -1,10 +1,12 @@
 using System.Diagnostics;
 using System.Net;
+using System.Collections.Immutable;
 using ConsoleControl.Client;
 using ConsoleControl.Contracts;
 using ConsoleControl.Controller.Bluetooth;
 using ConsoleControl.Core;
 using ConsoleControl.Daemon;
+using ConsoleControl.Video.FFmpeg;
 using Grpc.Core;
 using Grpc.Net.Client;
 using Microsoft.AspNetCore.Builder;
@@ -29,6 +31,10 @@ internal static class StreamingTransportChecks
         builder.Services.AddSingleton<IControllerOutput>(output);
         builder.Services.AddSingleton<ConsoleRuntime>();
         builder.Services.AddSingleton(new InputProfileStore(profilePath));
+        builder.Services.AddSingleton<IVideoCaptureAdapter, EmptyVideoAdapter>();
+        builder.Services.AddSingleton(new VideoSelectionStore(profilePath + ".video"));
+        builder.Services.AddSingleton(new VideoStreamAddress(new Uri("http://127.0.0.1/video.mjpeg")));
+        builder.Services.AddSingleton<VideoRuntime>();
 
         await using WebApplication app = builder.Build();
         app.MapGrpcService<ConsoleControlGrpcService>();
@@ -208,5 +214,16 @@ internal static class StreamingTransportChecks
             IsConnected = false;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class EmptyVideoAdapter : IVideoCaptureAdapter
+    {
+        public Task<ImmutableArray<VideoSource>> GetSourcesAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(ImmutableArray<VideoSource>.Empty);
+
+        public Task<IVideoCaptureSession> OpenAsync(
+            VideoSource source,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("The transport check must not open video capture.");
     }
 }

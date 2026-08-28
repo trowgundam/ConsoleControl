@@ -8,6 +8,7 @@
     <ProjectReference Include="../ConsoleControl.Contracts/ConsoleControl.Contracts.csproj" />
     <ProjectReference Include="../ConsoleControl.Controller.Bluetooth/ConsoleControl.Controller.Bluetooth.csproj" />
     <ProjectReference Include="../ConsoleControl.Core/ConsoleControl.Core.csproj" />
+    <ProjectReference Include="../ConsoleControl.Video.FFmpeg/ConsoleControl.Video.FFmpeg.csproj" />
     <PackageReference Include="Grpc.AspNetCore" Version="2.83.0" />
   </ItemGroup>
 </Project>

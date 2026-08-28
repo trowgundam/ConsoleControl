@@ -15,7 +15,10 @@ using DomainTrigger = ConsoleControl.Core.CanonicalTrigger;
 
 namespace ConsoleControl.Daemon;
 
-internal sealed class ConsoleControlGrpcService(ConsoleRuntime runtime, InputProfileStore inputProfiles)
+internal sealed class ConsoleControlGrpcService(
+    ConsoleRuntime runtime,
+    InputProfileStore inputProfiles,
+    VideoRuntime video)
     : ConsoleControlService.ConsoleControlServiceBase
 {
     public override Task<GetStatusReply> GetStatus(
@@ -155,6 +158,38 @@ internal sealed class ConsoleControlGrpcService(ConsoleRuntime runtime, InputPro
         }
     }
 
+    public override async Task<VideoInventoryReply> GetVideoInventory(
+        GetVideoInventoryRequest request,
+        ServerCallContext context) =>
+        ToReply(await video.GetInventoryAsync(context.CancellationToken).ConfigureAwait(false));
+
+    public override async Task<VideoSelectionReply> SelectVideoSource(
+        SelectVideoSourceRequest request,
+        ServerCallContext context)
+    {
+        try
+        {
+            VideoSelection selection = await video.SelectAsync(
+                new VideoSourceId(request.SourceId),
+                request.ExpectedRevision,
+                context.CancellationToken).ConfigureAwait(false);
+            return new VideoSelectionReply
+            {
+                SourceId = selection.SourceId.Value,
+                Revision = selection.Revision,
+                Status = selection.Status,
+            };
+        }
+        catch (VideoSelectionConflictException exception)
+        {
+            throw new RpcException(new Status(StatusCode.Aborted, exception.Message));
+        }
+        catch (ArgumentException exception)
+        {
+            throw InvalidArgument(exception.Message);
+        }
+    }
+
     private static ClientId ParseClient(string value) =>
         Guid.TryParse(value, out Guid parsed)
             ? new ClientId(parsed)
@@ -226,6 +261,32 @@ internal sealed class ConsoleControlGrpcService(ConsoleRuntime runtime, InputPro
     {
         InputConfigurationReply reply = new() { Revision = configuration.Revision };
         reply.Profiles.AddRange(configuration.Profiles.Select(ToMessage));
+        return reply;
+    }
+
+    private static VideoInventoryReply ToReply(VideoInventory inventory)
+    {
+        VideoInventoryReply reply = new()
+        {
+            Revision = inventory.Revision,
+            LiveStreamUri = inventory.LiveStreamUri.ToString(),
+            Status = inventory.Status,
+        };
+        if (inventory.SelectedSourceId is { } selected)
+        {
+            reply.SelectedSourceId = selected.Value;
+        }
+        reply.Sources.AddRange(inventory.Sources.Select(source => new VideoSourceMessage
+        {
+            Id = source.Id.Value,
+            DisplayName = source.DisplayName,
+            PreferredMode = new VideoModeMessage
+            {
+                Width = source.PreferredMode.Width,
+                Height = source.PreferredMode.Height,
+                FramesPerSecond = source.PreferredMode.FramesPerSecond,
+            },
+        }));
         return reply;
     }
 

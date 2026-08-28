@@ -6,6 +6,7 @@ using ConsoleControl.Client;
 using ConsoleControl.Core;
 using ConsoleControl.Input.Sdl;
 using Avalonia.Input;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 
 namespace ConsoleControl.Gui;
@@ -16,6 +17,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private IControlSession? _control;
     private InputForwarder? _forwarder;
     private InputSourceOption? _selectedInputSource;
+    private VideoSource? _selectedVideoSource;
+    private VideoPresenter? _videoPresenter;
+    private Bitmap? _videoImage;
+    private ulong _videoRevision;
+    private bool _loadingVideoSources;
+    private string _videoStatusText = "Finding video sources...";
     private string _statusText = "Connecting to daemon...";
     private bool _disposed;
 
@@ -30,6 +37,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ICommand PulseControlCommand { get; }
 
     public ObservableCollection<InputSourceOption> InputSources { get; } = [];
+    public ObservableCollection<VideoSource> VideoSources { get; } = [];
     internal InputForwarder? Forwarder => _forwarder;
 
     public InputSourceOption? SelectedInputSource
@@ -66,17 +74,56 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    public VideoSource? SelectedVideoSource
+    {
+        get => _selectedVideoSource;
+        set
+        {
+            if (_selectedVideoSource == value)
+            {
+                return;
+            }
+            _selectedVideoSource = value;
+            OnPropertyChanged();
+            if (!_loadingVideoSources && value is not null)
+            {
+                _ = SelectVideoSourceAsync(value);
+            }
+        }
+    }
+
+    public Bitmap? VideoImage
+    {
+        get => _videoImage;
+        private set
+        {
+            Bitmap? previous = _videoImage;
+            _videoImage = value;
+            OnPropertyChanged();
+            previous?.Dispose();
+        }
+    }
+
+    public string VideoStatusText
+    {
+        get => _videoStatusText;
+        private set
+        {
+            if (_videoStatusText == value)
+            {
+                return;
+            }
+            _videoStatusText = value;
+            OnPropertyChanged();
+        }
+    }
+
     public async Task InitializeAsync()
     {
+        await InitializeVideoAsync();
         try
         {
             ConsoleStatus status = await _session.GetStatusAsync(CancellationToken.None);
-            if (!status.BridgeConnected)
-            {
-                StatusText = status.Detail;
-                return;
-            }
-
             _control = await _session.TakeControlAsync(
                 ControlPriority.InteractiveUser,
                 CancellationToken.None);
@@ -88,7 +135,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             _forwarder.StatusChanged += OnForwardingStatusChanged;
             RefreshInputSources();
             SelectedInputSource = InputSources[0];
-            StatusText = FormatConnectionState(_control.ConnectionState);
+            StatusText = status.BridgeConnected
+                ? FormatConnectionState(_control.ConnectionState)
+                : status.Detail;
         }
         catch (Exception exception)
         {
@@ -104,6 +153,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
 
         _disposed = true;
+        if (_videoPresenter is not null)
+        {
+            await _videoPresenter.DisposeAsync();
+            _videoPresenter = null;
+        }
+        await Dispatcher.UIThread.InvokeAsync(() => VideoImage = null);
         if (_forwarder is not null)
         {
             InputForwarder forwarder = _forwarder;
@@ -180,6 +235,80 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             StatusText = $"Input selection failed: {exception.Message}";
         }
+    }
+
+    private async Task InitializeVideoAsync()
+    {
+        try
+        {
+            VideoInventory inventory = await _session.GetVideoInventoryAsync(CancellationToken.None);
+            _loadingVideoSources = true;
+            VideoSources.Clear();
+            foreach (VideoSource source in inventory.Sources)
+            {
+                VideoSources.Add(source);
+            }
+            _videoRevision = inventory.Revision;
+            _selectedVideoSource = VideoSources.FirstOrDefault(source =>
+                source.Id == inventory.SelectedSourceId);
+            OnPropertyChanged(nameof(SelectedVideoSource));
+            _loadingVideoSources = false;
+            VideoStatusText = inventory.Status;
+            await StartVideoPresenterAsync(inventory.LiveStreamUri);
+        }
+        catch (Exception exception)
+        {
+            _loadingVideoSources = false;
+            VideoStatusText = $"Video unavailable: {exception.Message}";
+        }
+    }
+
+    private async Task SelectVideoSourceAsync(VideoSource source)
+    {
+        try
+        {
+            VideoSelection selection = await _session.SelectVideoSourceAsync(
+                source.Id,
+                _videoRevision,
+                CancellationToken.None);
+            _videoRevision = selection.Revision;
+            VideoStatusText = selection.Status;
+        }
+        catch (Exception exception)
+        {
+            VideoStatusText = $"Video selection failed: {exception.Message}";
+            await InitializeVideoAsync();
+        }
+    }
+
+    private async Task StartVideoPresenterAsync(Uri streamUri)
+    {
+        if (_videoPresenter is not null)
+        {
+            await _videoPresenter.DisposeAsync();
+        }
+        _videoPresenter = new(
+            bitmap => Dispatcher.UIThread.Post(() =>
+            {
+                if (_disposed)
+                {
+                    bitmap.Dispose();
+                    return;
+                }
+                VideoImage = bitmap;
+                VideoStatusText = SelectedVideoSource is null
+                    ? "Video ready"
+                    : $"Video ready: {SelectedVideoSource.DisplayName}";
+            }),
+            status => Dispatcher.UIThread.Post(() => VideoStatusText = status),
+            () => Dispatcher.UIThread.Post(() =>
+            {
+                if (!_disposed)
+                {
+                    VideoImage = null;
+                }
+            }));
+        _videoPresenter.Start(streamUri);
     }
 
     private void OnSourcesChanged(object? sender, EventArgs eventArgs) =>
