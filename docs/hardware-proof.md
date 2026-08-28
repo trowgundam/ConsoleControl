@@ -16,13 +16,31 @@ It does not implement firmware updates or arbitrary personalities. Those belong 
 
 ## Build and validate
 
-Install Arduino CLI, the Adafruit nRF52 core, the .NET 10 SDK, `arm-none-eabi-objcopy`, and `shellcheck`. Then run:
+Install these build tools:
+
+- Arduino CLI 1.4.1 or later
+- .NET 10 SDK
+- GNU Arm Embedded binutils, including `arm-none-eabi-objcopy`
+- ShellCheck
+
+Configure Arduino CLI and install the exact Adafruit nRF52 core used by the tested build:
+
+```bash
+arduino-cli core update-index \
+  --additional-urls https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
+arduino-cli core install adafruit:nrf52@1.7.0 \
+  --additional-urls https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
+```
+
+From the repository root, build and validate the firmware:
 
 ```bash
 tools/hardware-proof.sh build
 ```
 
-The command builds the firmware, converts it to UF2, and rejects an output whose blocks leave the recorded application region. The output is `artifacts/hardware-proof/controller-bridge-proof.uf2`.
+The command restores the device-probe project, compiles for `adafruit:nrf52:feather52840`, converts the application to UF2, and rejects blocks outside the recorded application region. The output is `artifacts/hardware-proof/controller-bridge-proof.uf2`.
+
+ConsoleControl releases do not distribute this UF2. Each user generates it locally with the installed Adafruit core. Those build dependencies remain under their own licenses. GitHub Actions performs the same build as a validation check but does not upload its firmware output.
 
 With the board in double-reset bootloader mode, inspect it before copying:
 

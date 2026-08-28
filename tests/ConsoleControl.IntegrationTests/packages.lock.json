@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Google.Protobuf": {
+        "type": "Transitive",
+        "resolved": "3.31.1",
+        "contentHash": "gSnJbUmGiOTdWddPhqzrEscHq9Ls6sqRDPB9WptckyjTUyx70JOOAaDLkFff8gManZNN3hllQ4aQInnQyq/Z/A=="
+      },
+      "Grpc.AspNetCore": {
+        "type": "Transitive",
+        "resolved": "2.83.0",
+        "contentHash": "PMoR+paO24EgBjBvfCqrmkurBH+RmfOIYThsUv6sGx6LUH0kxhzQkjtZ44mJxU0IwEw64dCzHhIjAM+CmORp3g==",
+        "dependencies": {
+          "Google.Protobuf": "3.31.1",
+          "Grpc.AspNetCore.Server.ClientFactory": "2.83.0",
+          "Grpc.Tools": "2.83.0"
+        }
+      },
+      "Grpc.AspNetCore.Server": {
+        "type": "Transitive",
+        "resolved": "2.83.0",
+        "contentHash": "rWeSaXaSPIIerc82lhHKqmzlp/sgLnG+Zw1c3YEEVp/un+hJKPxJOXWuGUOS2cs3EvcZBZ2tliXsnAg5Mdk2Ew==",
+        "dependencies": {
+          "Grpc.Net.Common": "2.83.0"
+        }
+      },
+      "Grpc.AspNetCore.Server.ClientFactory": {
+        "type": "Transitive",
+        "resolved": "2.83.0",
+        "contentHash": "DrX1dE9WJNOsaKDQpD1gQaVE567jMNfhpBuG6P2NvGhirf2HZczfIJtd2d1L+steYh0YZ1q57Sa1ZHuufMPYBw==",
+        "dependencies": {
+          "Grpc.AspNetCore.Server": "2.83.0",
+          "Grpc.Net.ClientFactory": "2.83.0"
+        }
+      },
+      "Grpc.Core.Api": {
+        "type": "Transitive",
+        "resolved": "2.83.0",
+        "contentHash": "xU8BT2bCw4Ct+/qIFJhhjkDEilKUbBOfp4US7l3Xa3hnlkN9l2LgISCbOw4PFYpW5jJFcK7FUAyWOFIQ94Hiqg=="
+      },
+      "Grpc.Net.Client": {
+        "type": "Transitive",
+        "resolved": "2.83.0",
+        "contentHash": "dHYtx7hW4muttsCrWNG4/Ysb1iAIhNPEq28eo7vF166CdXn/RXOr3SGvSreIGIjvmdrADrBNJ2cUeJBto/T0XA==",
+        "dependencies": {
+          "Grpc.Net.Common": "2.83.0"
+        }
+      },
+      "Grpc.Net.ClientFactory": {
+        "type": "Transitive",
+        "resolved": "2.83.0",
+        "contentHash": "j07orG5YnET3n5+TnczHCQsyWL3a4n/lJlIS88B3Zffylpp0RkcPzLv4ILAwKmOWOBvbBHiytPzAwJ8p7JomEQ==",
+        "dependencies": {
+          "Grpc.Net.Client": "2.83.0"
+        }
+      },
+      "Grpc.Net.Common": {
+        "type": "Transitive",
+        "resolved": "2.83.0",
+        "contentHash": "9w52xxORdIGu4Mm8lff3psMIlarenu+7TC4uIfiiW9AyaHZ6iPE/18gIkG1DD9byGDuhjuhnN9hiviBUAmCuZw==",
+        "dependencies": {
+          "Grpc.Core.Api": "2.83.0"
+        }
+      },
+      "Grpc.Tools": {
+        "type": "Transitive",
+        "resolved": "2.83.0",
+        "contentHash": "vK2Go/83W0v2Nn7tTP9fGrX4IjmOa93s3M0SZeFimU1vIIr2wL9yNJlIyK21y85SGm3++JncB8IF751cjoLHuQ=="
+      },
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.8.3",
+        "contentHash": "K0B05oApxmviWalNHPMBBcRC7erKiDATz3ENNR/jqTR9JwIwLRefgDhj2jCRwL1aca99pXUe0qyQC73/xIuZig=="
+      },
+      "ModelContextProtocol": {
+        "type": "Transitive",
+        "resolved": "2.2.0",
+        "contentHash": "4Pb9u02Nwsp0poueDsqNdyGRojFxOYpljB7zDBsq+aHL+Afou3OgxlBc3GWFVnsRMRJrUtWqDh3s6k2JgPzmrQ==",
+        "dependencies": {
+          "ModelContextProtocol.Core": "[2.2.0]"
+        }
+      },
+      "ModelContextProtocol.Core": {
+        "type": "Transitive",
+        "resolved": "2.2.0",
+        "contentHash": "FeBfXU6T8k+jw4afg4sfxdEX2rL/e5oKOk9ROOGztu9k47+7Bz08sdaToYt2XvMY1opNbwxYQOFMj6wH9TInhA==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "10.8.3"
+        }
+      },
+      "SkiaSharp": {
+        "type": "Transitive",
+        "resolved": "3.119.4",
+        "contentHash": "53NOSUZ1Us+91Sm0uCkIivh/k7jOowRErZT2sIWwPFN9mLUvdxnE6rS4sWo4255+Rd2MWUSF+j0NMZHD6Cke+Q==",
+        "dependencies": {
+          "SkiaSharp.NativeAssets.Win32": "3.119.4",
+          "SkiaSharp.NativeAssets.macOS": "3.119.4"
+        }
+      },
+      "SkiaSharp.NativeAssets.Linux": {
+        "type": "Transitive",
+        "resolved": "3.119.4",
+        "contentHash": "UAyVzbqNfZsZbKbzj68zXLyUyF/SbTKmzTfOO6qDu++dtIUMMTzPBe8oOuzU/DiewpfKoUUlOSsJmqWc6blxBw=="
+      },
+      "SkiaSharp.NativeAssets.macOS": {
+        "type": "Transitive",
+        "resolved": "3.119.4",
+        "contentHash": "fgBOWEqbY012x7gMfJU4ezgz6dfhJb30Z6YdW35h85Zoe39+a8YNbAAwL29ihPfWoppg5AjvyKNzD1oCvlqWwA=="
+      },
+      "SkiaSharp.NativeAssets.Win32": {
+        "type": "Transitive",
+        "resolved": "3.119.4",
+        "contentHash": "XOpbx/4CReO2wYsq2s6rbvdauc6dntG4Zv499sHGTJ87bwZaFXszFkwql3+FIZMc8kUPeaj3Mx2ezIJmo8a1Kg=="
+      },
+      "Tmds.DBus.Protocol": {
+        "type": "Transitive",
+        "resolved": "0.95.0",
+        "contentHash": "qsC7o0FVMB/j+3Zt0ppoORlpWticKsHMN5NFG6egiUz3yYspqiV/3TxSK9iuitg1w6IYbMcwelPkLgeE8T074w=="
+      },
+      "consolecontrol.client": {
+        "type": "Project",
+        "dependencies": {
+          "ConsoleControl.Contracts": "[1.0.0, )",
+          "ConsoleControl.Core": "[1.0.0, )",
+          "Grpc.Net.Client": "[2.83.0, )"
+        }
+      },
+      "consolecontrol.contracts": {
+        "type": "Project",
+        "dependencies": {
+          "Google.Protobuf": "[3.31.1, )",
+          "Grpc.Core.Api": "[2.83.0, )"
+        }
+      },
+      "consolecontrol.controller.bluetooth": {
+        "type": "Project",
+        "dependencies": {
+          "ConsoleControl.Core": "[1.0.0, )",
+          "Tmds.DBus.Protocol": "[0.95.0, )"
+        }
+      },
+      "consolecontrol.core": {
+        "type": "Project"
+      },
+      "consolecontrol.daemon": {
+        "type": "Project",
+        "dependencies": {
+          "ConsoleControl.Contracts": "[1.0.0, )",
+          "ConsoleControl.Controller.Bluetooth": "[1.0.0, )",
+          "ConsoleControl.Core": "[1.0.0, )",
+          "ConsoleControl.Video.FFmpeg": "[1.0.0, )",
+          "Grpc.AspNetCore": "[2.83.0, )"
+        }
+      },
+      "consolecontrol.mcp": {
+        "type": "Project",
+        "dependencies": {
+          "ConsoleControl.Client": "[1.0.0, )",
+          "ConsoleControl.Core": "[1.0.0, )",
+          "ModelContextProtocol": "[2.2.0, )",
+          "SkiaSharp": "[3.119.4, )",
+          "SkiaSharp.NativeAssets.Linux": "[3.119.4, )"
+        }
+      },
+      "consolecontrol.video.ffmpeg": {
+        "type": "Project",
+        "dependencies": {
+          "ConsoleControl.Core": "[1.0.0, )"
+        }
+      }
+    },
+    "net10.0/linux-x64": {
+      "SkiaSharp.NativeAssets.Linux": {
+        "type": "Transitive",
+        "resolved": "3.119.4",
+        "contentHash": "UAyVzbqNfZsZbKbzj68zXLyUyF/SbTKmzTfOO6qDu++dtIUMMTzPBe8oOuzU/DiewpfKoUUlOSsJmqWc6blxBw=="
+      },
+      "SkiaSharp.NativeAssets.macOS": {
+        "type": "Transitive",
+        "resolved": "3.119.4",
+        "contentHash": "fgBOWEqbY012x7gMfJU4ezgz6dfhJb30Z6YdW35h85Zoe39+a8YNbAAwL29ihPfWoppg5AjvyKNzD1oCvlqWwA=="
+      },
+      "SkiaSharp.NativeAssets.Win32": {
+        "type": "Transitive",
+        "resolved": "3.119.4",
+        "contentHash": "XOpbx/4CReO2wYsq2s6rbvdauc6dntG4Zv499sHGTJ87bwZaFXszFkwql3+FIZMc8kUPeaj3Mx2ezIJmo8a1Kg=="
+      }
+    }
+  }
+}

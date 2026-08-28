@@ -4,7 +4,7 @@ ConsoleControl lets a person or an AI agent operate a game console through captu
 
 The current hardware target is a docked Nintendo Switch 2. A NanoKVM-USB captures HDMI video, while a small nRF52840 board presents a Switch-compatible USB controller. The NanoKVM's stock control connection cannot emulate the required controller, so ConsoleControl uses it only for video capture.
 
-The controller, GUI, live-video, and digital MCP paths have all passed on the target hardware. This is still a development build. Portable release archives and unattended firmware updates are not available yet.
+The controller, GUI, live-video, and digital MCP paths have all passed on the target hardware. This is still a development build. Portable desktop release archives and unattended firmware updates are not available yet.
 
 ## What works
 
@@ -67,7 +67,9 @@ The desktop applications currently require:
 - .NET 10 SDK
 - Linux with BlueZ and V4L2
 - `ffmpeg` and `v4l2-ctl` on `PATH`
-- A controller bridge flashed with the ConsoleControl firmware
+- A controller bridge flashed with a locally built ConsoleControl firmware image
+
+ConsoleControl releases do not include a controller-bridge UF2. Build and flash the firmware with [the nRF52840 hardware procedure](docs/hardware-proof.md).
 
 Restore and build the solution:
 
@@ -142,15 +144,23 @@ ConsoleControl-linux-x64/
 │   ├── consolecontrol-daemon
 │   ├── consolecontrol-gui
 │   └── consolecontrol-mcp
+├── libexec/
+│   └── consolecontrol/
+│       ├── daemon/
+│       ├── gui/
+│       └── mcp/
 ├── controller-personalities/
 ├── skills/
 ├── examples/
 │   └── codex-config.toml
+├── third-party-licenses/
 ├── LICENSE
 └── THIRD-PARTY-NOTICES.md
 ```
 
-GitHub Actions will build and test tagged releases, publish the three desktop applications, assemble the archive, build the controller firmware, and attach checksums. The firmware UF2 will remain a separate release artifact.
+The commands under `bin/` launch directory-based, self-contained .NET applications under `libexec/`. This keeps the command names short without depending on single-file extraction for Avalonia, SDL, or SkiaSharp.
+
+GitHub Actions validates every push and pull request. A `vMAJOR.MINOR.PATCH` tag runs the same validation before it builds the desktop archive, generates checksums, and creates a GitHub Release. Tagged CI also builds the controller firmware twice and verifies that both outputs are identical and stay inside the recorded application range. The workflow does not upload the firmware output or include it in the GitHub Release. Users build the UF2 locally by following [the hardware procedure](docs/hardware-proof.md).
 
 The first archive will target `linux-x64`. Windows needs platform-specific capture and Bluetooth adapters, so a Windows archive would be misleading today.
 
@@ -176,9 +186,9 @@ Signed over-the-air updates, interrupted-update rollback, and USB maintenance up
 
 ## Protocol and dependency provenance
 
-[NanoKVM-USB](https://github.com/sipeed/NanoKVM-USB) documents the capture device and its fixed CH9329 keyboard and mouse path. [OpenPuck](https://github.com/safijari/openpuck) was a research reference for Switch-compatible controller behavior on nRF52840 hardware. ConsoleControl implements that behavior independently and does not copy OpenPuck's AGPL source.
+[OpenPuck](https://github.com/safijari/openpuck) was a research reference for Switch-compatible controller behavior on nRF52840 hardware. ConsoleControl implements that behavior independently and does not copy OpenPuck's AGPL source. NanoKVM-USB and OpenPuck are not distributed dependencies.
 
-Dependency notices will ship in `THIRD-PARTY-NOTICES.md` before the first public release.
+See [the third-party notices](THIRD-PARTY-NOTICES.md) and [the dependency license audit](docs/research/dependency-license-audit.md) for shipped dependency licenses and release obligations.
 
 ## License
 

@@ -11,13 +11,27 @@ Use ConsoleControl only on the local machine. The daemon is a separate process; 
 
 Before starting a session, ask whether the user wants to watch through the GUI or run headless. Skip the question when the user already chose a mode. For a watched session, start both the daemon and GUI so the user can observe the video and take control. For a headless session, start only the daemon. The MCP client starts the stdio MCP server in either mode.
 
-From the repository root, start the daemon in a persistent terminal:
+Prefer the installed `consolecontrol-daemon` and `consolecontrol-gui` commands. In a source checkout without those commands, use the `dotnet run` fallbacks below.
+
+Start an installed daemon in a persistent terminal:
+
+```sh
+consolecontrol-daemon --adapter hci0
+```
+
+For a watched session, start the installed GUI in another persistent terminal:
+
+```sh
+consolecontrol-gui --daemon http://127.0.0.1:5041
+```
+
+From the repository root, the daemon fallback is:
 
 ```sh
 dotnet run --project src/ConsoleControl.Daemon -- --adapter hci0
 ```
 
-For a watched session, start the GUI in another persistent terminal:
+The watched-session GUI fallback is:
 
 ```sh
 dotnet run --project src/ConsoleControl.Gui -- --daemon http://127.0.0.1:5041

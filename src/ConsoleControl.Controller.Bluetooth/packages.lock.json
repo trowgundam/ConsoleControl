@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Tmds.DBus.Protocol": {
+        "type": "Direct",
+        "requested": "[0.95.0, )",
+        "resolved": "0.95.0",
+        "contentHash": "qsC7o0FVMB/j+3Zt0ppoORlpWticKsHMN5NFG6egiUz3yYspqiV/3TxSK9iuitg1w6IYbMcwelPkLgeE8T074w=="
+      },
+      "consolecontrol.core": {
+        "type": "Project"
+      }
+    },
+    "net10.0/linux-x64": {}
+  }
+}

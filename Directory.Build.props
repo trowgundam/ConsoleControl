@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+</Project>

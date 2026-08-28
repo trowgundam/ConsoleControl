@@ -1,0 +1,65 @@
+name: Firmware validation
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches:
+      - "**"
+    paths:
+      - firmware/**
+      - tools/ConsoleControl.DeviceProbe/**
+      - tools/hardware-proof.sh
+      - .github/workflows/firmware.yml
+  pull_request:
+    paths:
+      - firmware/**
+      - tools/ConsoleControl.DeviceProbe/**
+      - tools/hardware-proof.sh
+      - .github/workflows/firmware.yml
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  validate-controller-firmware:
+    name: Validate controller firmware
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: 10.0.111
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@81d310742121c928ea9c8bbd407b4217b432ae02 # v2.0.0
+        with:
+          version: 1.4.1
+
+      - name: Install firmware toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes binutils-arm-none-eabi
+          arduino-cli core update-index \
+            --additional-urls https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
+          arduino-cli core install adafruit:nrf52@1.7.0 \
+            --additional-urls https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
+          dotnet restore tools/ConsoleControl.DeviceProbe/ConsoleControl.DeviceProbe.csproj --locked-mode
+
+      - name: Build firmware twice and verify UF2
+        shell: bash
+        run: |
+          tools/hardware-proof.sh build
+          cp artifacts/hardware-proof/controller-bridge-proof.uf2 /tmp/controller-bridge-first.uf2
+          tools/hardware-proof.sh build
+          cmp /tmp/controller-bridge-first.uf2 artifacts/hardware-proof/controller-bridge-proof.uf2
+          tools/hardware-proof.sh verify artifacts/hardware-proof/controller-bridge-proof.uf2

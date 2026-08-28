@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "SDL3-CS": {
+        "type": "Direct",
+        "requested": "[3.4.14.1, )",
+        "resolved": "3.4.14.1",
+        "contentHash": "o3X50ZpVw20wtCQZO/To9b5aesE22ZcYE9fL/2IOd4KCuT9q1DBsa8PHJJIcxt9sW4uHvjj8gP6n5KPMzzxeKA=="
+      },
+      "SDL3-CS.Linux": {
+        "type": "Direct",
+        "requested": "[3.4.14.1, )",
+        "resolved": "3.4.14.1",
+        "contentHash": "8nrQnkKPm0t48u659QEbYEpoJQ0puP1WlPX//NhbF48uZ2+ofOteKgZiXVS2iRLUEub15wWcyRs3QJDt+Hp0TQ=="
+      },
+      "consolecontrol.core": {
+        "type": "Project"
+      }
+    },
+    "net10.0/linux-x64": {
+      "SDL3-CS.Linux": {
+        "type": "Direct",
+        "requested": "[3.4.14.1, )",
+        "resolved": "3.4.14.1",
+        "contentHash": "8nrQnkKPm0t48u659QEbYEpoJQ0puP1WlPX//NhbF48uZ2+ofOteKgZiXVS2iRLUEub15wWcyRs3QJDt+Hp0TQ=="
+      }
+    }
+  }
+}
