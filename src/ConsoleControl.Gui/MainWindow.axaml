@@ -1,0 +1,123 @@
+<Window
+    x:Class="ConsoleControl.Gui.MainWindow"
+    x:DataType="local:MainWindowViewModel"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:ConsoleControl.Gui"
+    Title="ConsoleControl"
+    Width="720"
+    Height="500"
+    MinWidth="640"
+    MinHeight="440"
+    WindowStartupLocation="CenterScreen">
+  <Window.Styles>
+    <Style Selector="Button.controller">
+      <Setter Property="Width" Value="64" />
+      <Setter Property="Height" Value="52" />
+      <Setter Property="FontSize" Value="17" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.face">
+      <Setter Property="Width" Value="66" />
+      <Setter Property="Height" Value="66" />
+      <Setter Property="CornerRadius" Value="33" />
+      <Setter Property="FontSize" Value="22" />
+    </Style>
+    <Style Selector="Button.system">
+      <Setter Property="Width" Value="52" />
+      <Setter Property="Height" Value="38" />
+      <Setter Property="FontSize" Value="14" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="24" RowSpacing="16">
+    <TextBlock
+        Grid.Row="0"
+        Text="Switch controller"
+        FontSize="24"
+        FontWeight="SemiBold" />
+
+    <Grid Grid.Row="1" ColumnDefinitions="*,*,64,64,*,*" ColumnSpacing="8">
+      <Button Grid.Column="0" Classes="controller" Content="ZL"
+              Command="{Binding PulseControlCommand}"
+              CommandParameter="{x:Static local:DigitalControl.ZL}" />
+      <Button Grid.Column="1" Classes="controller" Content="L"
+              Command="{Binding PulseControlCommand}"
+              CommandParameter="{x:Static local:DigitalControl.L}" />
+      <Button Grid.Column="2" Classes="controller system" Content="−"
+              Command="{Binding PulseControlCommand}"
+              CommandParameter="{x:Static local:DigitalControl.Minus}" />
+      <Button Grid.Column="3" Classes="controller system" Content="+"
+              Command="{Binding PulseControlCommand}"
+              CommandParameter="{x:Static local:DigitalControl.Plus}" />
+      <Button Grid.Column="4" Classes="controller" Content="R"
+              HorizontalAlignment="Right"
+              Command="{Binding PulseControlCommand}"
+              CommandParameter="{x:Static local:DigitalControl.R}" />
+      <Button Grid.Column="5" Classes="controller" Content="ZR"
+              HorizontalAlignment="Right"
+              Command="{Binding PulseControlCommand}"
+              CommandParameter="{x:Static local:DigitalControl.ZR}" />
+    </Grid>
+
+    <Grid Grid.Row="2" ColumnDefinitions="1*,1.2*,1*" VerticalAlignment="Center">
+      <Grid Grid.Column="0" Width="180" Height="180"
+            RowDefinitions="60,60,60" ColumnDefinitions="60,60,60"
+            HorizontalAlignment="Center">
+        <Button Grid.Row="0" Grid.Column="1" Classes="controller" Content="▲"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static local:DigitalControl.DPadUp}" />
+        <Button Grid.Row="1" Grid.Column="0" Classes="controller" Content="◀"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static local:DigitalControl.DPadLeft}" />
+        <Border Grid.Row="1" Grid.Column="1" Width="56" Height="48"
+                Background="{DynamicResource SystemControlBackgroundBaseLowBrush}" />
+        <Button Grid.Row="1" Grid.Column="2" Classes="controller" Content="▶"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static local:DigitalControl.DPadRight}" />
+        <Button Grid.Row="2" Grid.Column="1" Classes="controller" Content="▼"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static local:DigitalControl.DPadDown}" />
+      </Grid>
+
+      <StackPanel Grid.Column="1" HorizontalAlignment="Center" Spacing="14">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
+          <Button Classes="controller system" Content="CAP"
+                  Command="{Binding PulseControlCommand}"
+                  CommandParameter="{x:Static local:DigitalControl.Capture}" />
+          <Button Classes="controller system" Content="HOME"
+                  Width="68"
+                  Command="{Binding PulseControlCommand}"
+                  CommandParameter="{x:Static local:DigitalControl.Home}" />
+        </StackPanel>
+        <TextBlock Text="Each click sends an 80 ms press"
+                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                   HorizontalAlignment="Center" />
+      </StackPanel>
+
+      <Grid Grid.Column="2" Width="198" Height="198"
+            RowDefinitions="66,66,66" ColumnDefinitions="66,66,66"
+            HorizontalAlignment="Center">
+        <Button Grid.Row="0" Grid.Column="1" Classes="controller face" Content="X"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static local:DigitalControl.X}" />
+        <Button Grid.Row="1" Grid.Column="0" Classes="controller face" Content="Y"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static local:DigitalControl.Y}" />
+        <Button Grid.Row="1" Grid.Column="2" Classes="controller face" Content="A"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static local:DigitalControl.A}" />
+        <Button Grid.Row="2" Grid.Column="1" Classes="controller face" Content="B"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static local:DigitalControl.B}" />
+      </Grid>
+    </Grid>
+
+    <TextBlock Grid.Row="3"
+        HorizontalAlignment="Center"
+        Text="{Binding StatusText}"
+        TextWrapping="Wrap" />
+  </Grid>
+</Window>

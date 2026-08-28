@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+option csharp_namespace = "ConsoleControl.Contracts";
+
+package consolecontrol.v1;
+
+service ConsoleControlService {
+  rpc GetStatus (GetStatusRequest) returns (GetStatusReply);
+  rpc AcquireControl (AcquireControlRequest) returns (AcquireControlReply);
+  rpc SetControllerState (SetControllerStateRequest) returns (SetControllerStateReply);
+  rpc ReleaseControl (ReleaseControlRequest) returns (ReleaseControlReply);
+}
+
+message GetStatusRequest {}
+
+message GetStatusReply {
+  bool bridge_connected = 1;
+  bool control_available = 2;
+  string detail = 3;
+}
+
+message AcquireControlRequest {
+  string client_id = 1;
+  ControlPriority priority = 2;
+}
+
+message AcquireControlReply {
+  uint64 lease_generation = 1;
+}
+
+message SetControllerStateRequest {
+  string client_id = 1;
+  uint64 lease_generation = 2;
+  uint32 buttons = 3;
+  uint32 dpad = 4;
+  uint32 left_stick_x = 5;
+  uint32 left_stick_y = 6;
+  uint32 right_stick_x = 7;
+  uint32 right_stick_y = 8;
+  uint32 left_trigger = 9;
+  uint32 right_trigger = 10;
+}
+
+message SetControllerStateReply {}
+
+message ReleaseControlRequest {
+  string client_id = 1;
+  uint64 lease_generation = 2;
+}
+
+message ReleaseControlReply {}
+
+enum ControlPriority {
+  CONTROL_PRIORITY_UNSPECIFIED = 0;
+  CONTROL_PRIORITY_AUTOMATION = 1;
+  CONTROL_PRIORITY_INTERACTIVE_USER = 2;
+}
