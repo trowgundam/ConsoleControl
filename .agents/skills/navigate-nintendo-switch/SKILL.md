@@ -35,6 +35,8 @@ From HOME, move along the bottom function row to the gear icon and press `a`. Na
 
 ## Handle uncertainty
 
-If the selected item is unclear, render the same screenshot at medium fidelity before taking another screenshot. If it remains unclear, render high. When an unexpected dialog appears, stop the planned sequence, inspect it, and tell the user before accepting destructive, account, purchase, transfer, initialization, or recovery actions.
+If the selected item is unclear, render the same screenshot at medium fidelity before taking another screenshot. If it remains unclear, render high. Before confirming a dialog, inspect it and identify both the focused action and its consequence. When an unexpected dialog appears, stop the planned sequence and tell the user before accepting destructive, account, purchase, transfer, initialization, or recovery actions.
+
+After closing software, capture a screenshot and confirm that its `Playing` indicator is gone before reporting that the software closed.
 
 Never automate purchases, deletion, factory initialization, account changes, parental-control changes, data transfer, or recovery-mode actions without explicit user direction for that exact action.

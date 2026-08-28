@@ -36,7 +36,7 @@ Inventory revisions prevent stale selections. On a revision conflict, enumerate 
 
 ## Observe and act
 
-Start screenshots at `low`. Use `console_render_screenshot` with the returned `screenshot_id` to render the exact retained frame at `medium` or `high`; do not capture a new frame when comparing fidelity. Capture a new screenshot after input when state may have changed. Retained frames expire after five minutes and can be evicted by capacity limits.
+Start screenshots at `low`. Use `console_render_screenshot` with the returned `screenshot_id` to render the exact retained frame at `medium` or `high`; do not capture a new frame when comparing fidelity. Capture a new screenshot after input when state may have changed. Retained frames expire after five minutes and can be evicted by capacity limits. Use the MCP screenshot tools instead of opening the capture device through FFmpeg or another process.
 
 Use `console_press` for one atomic digital action. Use `console_hold` for a bounded hold. Use `console_run_sequence` when timing or simultaneous buttons matter:
 
@@ -46,6 +46,8 @@ Use `console_press` for one atomic digital action. Use `console_hold` for a boun
 - `screenshot` captures at that point in the timeline.
 
 Keep sequences short enough to observe and interrupt. Digital automation supports at most 256 commands, 30 seconds, eight screenshots, and 32 MiB of original screenshot data. Analog automation is not available.
+
+Prefer a separate `console_get_screenshot` call after a sequence. Include a `screenshot` command in the sequence only when the exact timeline position matters. Bundled screenshots can make the tool response too large for the MCP client or model context.
 
 ## Recover from errors
 
