@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using System.Threading.Channels;
+
 using Avalonia.Input;
+
 using ConsoleControl.Client;
 using ConsoleControl.Core;
 using ConsoleControl.Input.Sdl;

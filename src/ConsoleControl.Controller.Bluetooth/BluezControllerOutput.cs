@@ -1,4 +1,5 @@
 using ConsoleControl.Core;
+
 using Tmds.DBus.Protocol;
 
 namespace ConsoleControl.Controller.Bluetooth;

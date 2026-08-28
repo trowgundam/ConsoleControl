@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+
 using ConsoleControl.Core;
 
 namespace ConsoleControl.Video.FFmpeg;

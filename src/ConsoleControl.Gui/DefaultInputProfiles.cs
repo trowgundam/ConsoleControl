@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+
 using Avalonia.Input;
+
 using ConsoleControl.Core;
 using ConsoleControl.Input.Sdl;
 

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+
 using ConsoleControl.Core;
 
 namespace ConsoleControl.Daemon;

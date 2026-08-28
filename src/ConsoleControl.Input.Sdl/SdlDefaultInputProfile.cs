@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+
 using ConsoleControl.Core;
+
 using SDL3;
 
 namespace ConsoleControl.Input.Sdl;

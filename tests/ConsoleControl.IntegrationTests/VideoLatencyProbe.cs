@@ -1,4 +1,5 @@
 using System.Diagnostics;
+
 using ConsoleControl.Client;
 using ConsoleControl.Core;
 

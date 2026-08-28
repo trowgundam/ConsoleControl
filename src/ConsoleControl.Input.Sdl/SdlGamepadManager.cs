@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using System.Text;
+
 using ConsoleControl.Core;
+
 using SDL3;
 
 namespace ConsoleControl.Input.Sdl;
