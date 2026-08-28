@@ -1,85 +1,90 @@
 # ConsoleControl
 
-ConsoleControl lets a local desktop application control a game console through a small controller bridge. The first target is a docked Nintendo Switch 2 connected through a NanoKVM-USB.
+ConsoleControl lets a person or an AI agent operate a game console through captured video and an emulated controller. A local daemon owns the hardware, an Avalonia GUI provides interactive control, and an MCP server gives agents a bounded automation interface.
 
-The controller hardware proof has passed. The current desktop slice has daemon-backed Avalonia controls, live video, focused keyboard and SDL gamepad forwarding, and a local MCP server for digital input automation.
+The current hardware target is a docked Nintendo Switch 2. A NanoKVM-USB captures HDMI video, while a small nRF52840 board presents a Switch-compatible USB controller. The NanoKVM's stock control connection cannot emulate the required controller, so ConsoleControl uses it only for video capture.
 
-## First release
+The controller, GUI, live-video, and digital MCP paths have all passed on the target hardware. This is still a development build. Portable release archives and unattended firmware updates are not available yet.
 
-The project contains three applications:
+## What works
 
-- `ConsoleControl.Daemon` owns video capture, the controller bridge, configuration, and control arbitration.
-- `ConsoleControl.Gui` connects to the daemon, displays live video, and forwards keyboard or physical-controller input.
-- `ConsoleControl.Mcp` exposes screenshots and bounded digital-input sequences to an MCP client over stdio.
+- Live video from a selectable V4L2 capture source
+- On-screen digital controls
+- Focused keyboard forwarding
+- SDL gamepad forwarding with per-device mappings
+- One control lease shared between the GUI and automation clients
+- GUI takeover of a running automation sequence
+- MCP screenshots at three fidelity levels
+- Individual digital presses, bounded holds, and timed sequences
+- Controller-bridge and video-source discovery through both the GUI and MCP
+- Automatic recovery after daemon or capture-device interruption
 
-The current release supports one local console session, selectable video capture, and one Switch Pro-compatible controller personality. It does not include remote access, audio, recording, motion, rumble, or analog automation.
+Analog MCP control, motion, rumble, audio, recording, remote access, and Windows support are outside the current release.
+
+## How the pieces fit
+
+```mermaid
+flowchart LR
+    Switch["Nintendo Switch 2"]
+    Capture["NanoKVM-USB"]
+    Bridge["nRF52840 controller bridge"]
+    Daemon["ConsoleControl daemon"]
+    GUI["Avalonia GUI"]
+    MCP["MCP server"]
+    Agent["AI agent"]
+
+    Switch -- HDMI --> Capture
+    Capture -- USB video --> Daemon
+    Daemon -- Bluetooth LE --> Bridge
+    Bridge -- USB controller --> Switch
+    GUI <-- "gRPC and MJPEG" --> Daemon
+    MCP <-- gRPC --> Daemon
+    Agent <-- stdio --> MCP
+```
+
+The daemon owns capture, the controller bridge, device selection, and control arbitration. The GUI and MCP server are clients. Only one client can send controller input at a time, but every client may continue to observe video.
+
+See [the architecture](docs/architecture.md), [the domain language](CONTEXT.md), and [the accepted design decisions](docs/adr/) for the implementation boundaries.
 
 ## Hardware
 
-The planned setup is:
+The tested setup uses:
 
-```text
-                         HDMI
-Nintendo Switch 2 -----------------> NanoKVM-USB
-        ^                                  |
-        | USB controller                   | USB 3 capture
-        |                                  v
-nRF52840 bridge <---- Bluetooth LE ---- ConsoleControl.Daemon
-                                               ^
-                                               | gRPC on loopback TCP
-                                               v
-                                       ConsoleControl.Gui
+- A docked Nintendo Switch 2
+- A NanoKVM-USB connected as a UVC capture device
+- A controller bridge built around the Nordic Semiconductor nRF52840 microcontroller
+- The tested board is the [Teyleten Robot Pro Micro nRF52840 clone](https://www.amazon.com/dp/B0CYLNZ6V4), Amazon ASIN `B0CYLNZ6V4`
+- A Linux computer with Bluetooth and a free USB capture connection
+
+The controller bridge runs C++ firmware built with Adafruit's nRF52 Arduino core, TinyUSB, and Bluefruit. The firmware presents a wired Switch Pro-compatible controller to the console and receives complete controller states over Bluetooth LE.
+
+Other nRF52840 clones may be compatible, but only the linked Teyleten board has passed the hardware tests. Read [the hardware proof procedure](docs/hardware-proof.md) before flashing another board. Boards can differ in pinout, bootloader, SoftDevice, and flash layout even when their listings look identical.
+
+## Development requirements
+
+The desktop applications currently require:
+
+- .NET 10 SDK
+- Linux with BlueZ and V4L2
+- `ffmpeg` and `v4l2-ctl` on `PATH`
+- A controller bridge flashed with the ConsoleControl firmware
+
+Restore and build the solution:
+
+```sh
+dotnet restore ConsoleControl.slnx
+dotnet build ConsoleControl.slnx --no-restore
 ```
 
-The controller bridge target is the Teyleten Robot Pro Micro nRF52840 board sold under Amazon ASIN `B0CYLNZ6V4`.
+Run the repeatable desktop checks:
 
-The NanoKVM-USB control port cannot emulate a Switch controller with its stock firmware. Its client sends fixed CH9329 keyboard and mouse commands. The CH9329 custom HID mode has a fixed vendor-defined interface and cannot supply the descriptors or protocol behavior expected by a Switch. ConsoleControl therefore treats the NanoKVM-USB as a UVC capture device and uses the nRF52840 for controller output.
+```sh
+tools/verify-desktop-slice.sh
+```
 
-## How control works
+## Run the GUI
 
-The GUI converts keyboard, on-screen, and SDL gamepad input into complete canonical controller snapshots. Complete snapshots avoid stuck buttons caused by a lost button-release event.
-
-The daemon grants one control lease at a time. Observers can always watch video. A future agent may hold an automation lease, but an interactive GUI user can revoke it and take control. Revocation, disconnect, timeout, bridge loss, personality change, and daemon shutdown all send a neutral controller state. Delayed writes from an old lease are rejected by lease generation.
-
-The daemon translates canonical state through the active controller personality. The first personality is a wired Hori-compatible controller with buttons, D-pad, and two sticks. Motion and rumble require a different personality and are outside the first release.
-
-## Controller bridge
-
-The bridge firmware uses C++ with Adafruit's nRF52 Arduino core, TinyUSB, and Bluefruit. This stack uses the board's installed S140 radio firmware and follows the same hardware path that OpenPuck has exercised on these nRF52840 clones. A hardware proof must validate it on the purchased board before the desktop projects depend on it.
-
-The Hori proof established concurrent USB and Bluetooth operation, end-to-end button input, and automatic neutral release, but Switch 2 rejected that older controller identity. The wired Switch Pro replacement now passes on Switch 2. The console completes initialization and accepts button snapshots forwarded over Bluetooth. Build and inspect the firmware with `tools/hardware-proof.sh`. See [the hardware proof procedure](docs/hardware-proof.md) before flashing it.
-
-During startup, the daemon uploads a versioned controller personality over BLE. The package contains the USB identity, descriptors, input-report layout, polling limits, and output behavior. The bridge validates the package in bounded RAM, disconnects its USB device, installs the personality, and reconnects. Personalities and controller state are not written to flash.
-
-Descriptors can define straightforward HID controllers, including the initial Hori target. Descriptors cannot implement timing-sensitive handshakes. A future protocol such as a full Switch Pro Controller may select a handler already compiled into the firmware. The bridge never accepts uploaded executable code.
-
-The bridge repeats the latest accepted report at the USB polling rate. USB polling never waits for BLE. A BLE timeout or disconnect immediately replaces the current report with neutral state.
-
-## Firmware updates and recovery
-
-Normal firmware updates travel over BLE while the board remains connected to the Switch. The updater stages a signed image outside the running application, verifies it, and marks it pending. The boot process rolls back an image that fails its health check.
-
-The same signed package may later travel through a USB maintenance interface after moving the board's USB cable to the computer. Application code can request maintenance mode, so routine USB updates do not require a double reset. The board has only one USB connection, so it cannot remain connected to the Switch during a laptop-driven USB update.
-
-The factory UF2 bootloader remains the recovery path. Before firmware development, the hardware proof must read `INFO_UF2.TXT`, record the exact bootloader and memory map, back up recoverable metadata, and prove double-reset recovery. Firmware tooling must reject writes to the bootloader and other protected regions. The project will not claim recovery guarantees until that proof passes on the purchased board.
-
-The nRF52840 rates a flash page for 10,000 erase cycles. Ordinary control and personality changes cause no flash writes. Firmware updates, boot metadata, and BLE bonding are the expected flash writers.
-
-## Desktop architecture
-
-The daemon presents a narrow client API over gRPC on loopback TCP. Generated protobuf messages remain transport details. GUI code uses canonical domain types through `ConsoleControl.Client`.
-
-The daemon and GUI are started separately. Both bind or connect only to explicit loopback addresses. Process discovery, automatic launch, endpoint authentication, Unix sockets, and Windows named pipes are not implemented.
-
-The daemon runs FFmpeg as a child process behind `IVideoCaptureAdapter`. Development requires `ffmpeg` and `v4l2-ctl` on `PATH`. FFmpeg reads MJPEG from the selected V4L2 device and copies the compressed frames without transcoding.
-
-The daemon publishes live video as multipart MJPEG over a separate loopback HTTP port. gRPC manages source discovery and selection. The daemon retains only the latest compressed frame, so a slow viewer misses stale frames without blocking capture. The Avalonia client also keeps only one encoded frame waiting for decode.
-
-See [the architecture](docs/architecture.md), [the domain language](CONTEXT.md), and [the architecture decisions](docs/adr/) for the detailed boundaries and rationale.
-
-## Run the controller-button slice
-
-Connect the flashed controller bridge to the Switch dock. Start the daemon:
+Connect the controller bridge to the Switch dock and connect the NanoKVM-USB to the computer. Start the daemon:
 
 ```sh
 dotnet run --project src/ConsoleControl.Daemon -- \
@@ -88,127 +93,93 @@ dotnet run --project src/ConsoleControl.Daemon -- \
   --adapter hci0
 ```
 
-In another terminal, start the GUI:
+Start the GUI in another terminal:
 
 ```sh
 dotnet run --project src/ConsoleControl.Gui -- \
   --daemon http://127.0.0.1:5041
 ```
 
-The GUI scans the configured Bluetooth adapter for firmware advertising the ConsoleControl service UUID. Choose a device from **Controller bridge**. It also lists MJPEG V4L2 capture devices by their stable `/dev/v4l/by-id` names. Choose a device from **Video source**. The daemon remembers both selections and opens the capture device's best MJPEG mode up to 1920x1080 at 60 fps. A controller bridge cannot be changed while any client has control.
+Choose a controller bridge and video source. Then choose **Take Control** before sending input. The GUI starts as an observer so an automation client can retain control while a user watches.
 
-The GUI reports `Ready` after the daemon connects to the bridge and grants control. Choose Keyboard or one connected gamepad from the input-source list. Only the selected source sends input. Switching sources, losing keyboard focus, or disconnecting the selected gamepad clears its input before another source can take over.
+Choose a keyboard or gamepad from the input-source list. Only the selected source sends input. Keyboard input is active only while the GUI has focus. Switching sources, losing focus, or disconnecting the selected gamepad clears the current controller state.
 
-Controller state travels over one lease-owned gRPC stream. The client retains only the newest state, sends ordinary changes at no more than 60 Hz, and sends a heartbeat every 500 ms. Neutral state bypasses the rate limit. If the stream, daemon, or Bluetooth bridge drops, the daemon releases the lease and neutralizes the controller; the GUI reports the connection state and retries from neutral without replaying held input.
-
-The default keyboard mapping uses the arrow keys for the D-pad, `X/Z/S/A` for `A/B/X/Y`, `Q/E` for `L/R`, `1/3` for `ZL/ZR`, Tab and Enter for Minus and Plus, and `H/C` for Home and Capture. SDL gamepads use their standard positional layout, sticks, shoulders, and triggers.
-
-Choose **Configure input mapping…** to open the modal mapping window. Click a Switch button, then press a key, gamepad button, or trigger on the selected host input source. Use **L STICK** or **R STICK**, then move a host stick, to bind its paired axes. Repeat button capture to assign several host controls to the same Switch control. One host control can also be captured for several Switch controls. Select a displayed button or trigger binding to remove it, then save the profile. Profiles are stored by keyboard identity or SDL device GUID, so equivalent controllers reuse the same profile. The daemon persists profiles in its per-user application-data directory. Stick dead zones, inversion, and scaling are represented in each profile; detailed transform editing is not yet exposed in the GUI.
-
-On-screen controls remain available with either forwarded source. Each click adds an 80 ms overlay without releasing buttons or axes held by the selected source. This slice still uses explicit process startup and an unauthenticated loopback endpoint.
-
-The GUI starts as an observer. Choose **Take Control** to send input. If automation owns the control lease, this action stops its running sequence, sends a neutral controller state, and grants control to the GUI. Choose **Release Control** before automation can take control again.
+To edit a mapping, choose **Configure input mapping...**. Select a Switch control in the controller diagram, then press the key, button, trigger, or stick direction that should activate it. A Switch control may have several bindings. Profiles are stored by keyboard identity or SDL device GUID, so equivalent controllers reuse the same mapping.
 
 ## Run the MCP server
 
-Start the daemon, then configure your MCP client to run:
+The MCP server communicates over stdio and expects the daemon to be running. Configure an MCP client to launch:
 
 ```sh
 dotnet run --project src/ConsoleControl.Mcp -- \
   --daemon http://127.0.0.1:5041
 ```
 
-An MCP client configuration that accepts command-and-argument entries can use:
+This repository contains a project-scoped Codex configuration in [`.codex/config.toml`](.codex/config.toml). It uses an absolute development path and is not suitable for redistribution as written.
 
-```json
-{
-  "mcpServers": {
-    "console-control": {
-      "command": "dotnet",
-      "args": [
-        "run",
-        "--project",
-        "/absolute/path/to/ConsoleControl/src/ConsoleControl.Mcp",
-        "--",
-        "--daemon",
-        "http://127.0.0.1:5041"
-      ]
-    }
-  }
-}
-```
+An agent starts by reading status, selecting unavailable hardware when necessary, and requesting control with a reason. If the GUI holds control, the user sees that reason and decides whether to release it. The GUI can take control back at any time, which stops the running sequence and neutralizes the controller.
 
-The server exposes status, controller-bridge and video-source inventory and selection, control acquisition and release, screenshots, individual digital input, and bounded sequences. Call `console_get_status` first. Status reads cached state and does not scan hardware. If status reports an unknown, unavailable, or unselected device, enumerate that device type and make an explicit selection before requesting control. Call `console_request_control` with a nonblank reason before sending input. If the GUI has control, it displays that reason and lets the user release control or decline the request. An accepted automation lease remains active between input calls. A GUI takeover revokes it immediately. Input tools refuse commands until the agent requests control again. `console_release_control` is idempotent.
+The MCP server supports:
 
-Every MCP tool returns a JSON envelope in its first text block. The envelope always contains `outcome`, `detail`, `recovery`, `retryable`, and `data`; device and result fields use descriptive snake_case names. The MCP initialization response also supplies the essential discovery, screenshot, control, and sequence rules so a client can operate without repository context.
+- Cached daemon and hardware status
+- Controller-bridge and video-source inventory and selection
+- Control requests and release
+- Retained screenshots at low, medium, and original fidelity
+- Atomic digital presses and bounded holds
+- Timed sequences with overlapping holds, pauses, and screenshots
 
-See [the MCP operation skill](.agents/skills/operate-console-control/SKILL.md) for the complete tool workflow and recovery rules. See [the Switch navigation skill](.agents/skills/navigate-nintendo-switch/SKILL.md) for menu navigation conventions.
+Sequences are limited to 256 commands, 30 seconds, eight screenshots, and 32 MiB of original screenshot data. Analog automation is not implemented.
 
-`console_get_screenshot` and `console_run_sequence` return `low` fidelity by default. `low` is at most 640×360. `medium` is at most 1280×720. `high` returns the exact original JPEG at its captured dimensions. Every screenshot result includes an opaque `screenshot_id`. Call `console_render_screenshot` with that ID to inspect the same frame at another fidelity. The MCP server retains at most 16 original screenshots and 64 MiB for five minutes. Expired or evicted IDs return an error that tells the caller to capture a new screenshot.
+Agents can use [the ConsoleControl operation skill](.agents/skills/operate-console-control/SKILL.md) and [the Switch navigation skill](.agents/skills/navigate-nintendo-switch/SKILL.md). The operation skill asks whether the user wants a watched GUI session or a headless session before it starts the local processes.
 
-Sequences accept at most 256 commands, run for at most 30 seconds, capture at most eight screenshots, and capture at most 32 MiB of original JPEG data. `press` advances the sequence time by its duration. `hold` schedules a release without advancing sequence time. `pause` advances sequence time while scheduled holds remain active. A failed screenshot stops the sequence, releases all buttons, and returns both earlier captures and the failed capture message. The `screenshotFidelity` argument selects the initial rendering for every successful capture. Each capture has its own ID and can be rendered again independently.
+## Planned release archives
 
-Run the repeatable desktop checks with:
-
-```sh
-tools/verify-desktop-slice.sh
-```
-
-With the daemon and GUI running, sample video delivery and process memory for ten minutes:
-
-```sh
-tools/verify-video-stability.sh 10
-```
-
-## Planned repository layout
+The first published release will be a portable, self-contained Linux archive. Users will not need the repository or .NET SDK. The archive will contain:
 
 ```text
-src/
-  ConsoleControl.Core/
-  ConsoleControl.Contracts/
-  ConsoleControl.Client/
-  ConsoleControl.Daemon/
-  ConsoleControl.Video.FFmpeg/
-  ConsoleControl.Controller.Bluetooth/
-  ConsoleControl.Input.Sdl/
-  ConsoleControl.Gui/
-tests/
-  ConsoleControl.Core.Tests/
-  ConsoleControl.Protocol.Tests/
-  ConsoleControl.IntegrationTests/
-firmware/
-  ConsoleControl.ControllerBridge/
-controller-personalities/
-  switch-hori-usb/
-tools/
-  ConsoleControl.DeviceProbe/
-  ConsoleControl.FirmwarePack/
-docs/
-  adr/
-  hardware/
-  protocols/
+ConsoleControl-linux-x64/
+├── bin/
+│   ├── consolecontrol-daemon
+│   ├── consolecontrol-gui
+│   └── consolecontrol-mcp
+├── controller-personalities/
+├── skills/
+├── examples/
+│   └── codex-config.toml
+├── LICENSE
+└── THIRD-PARTY-NOTICES.md
 ```
 
-Each .NET project has its own directory. Firmware, controller-personality data, documentation, and tools stay in their own top-level directories.
+GitHub Actions will build and test tagged releases, publish the three desktop applications, assemble the archive, build the controller firmware, and attach checksums. The firmware UF2 will remain a separate release artifact.
 
-## Delivery plan
+The first archive will target `linux-x64`. Windows needs platform-specific capture and Bluetooth adapters, so a Windows archive would be misleading today.
 
-1. Prove the exact board, factory bootloader, memory map, double-reset recovery, concurrent BLE and USB operation, static Hori enumeration on Switch 2, and neutralization after BLE loss.
-2. Upload the Hori personality into RAM, re-enumerate USB, forward controller snapshots, and prove that normal operation writes no flash.
-3. Build the daemon's session runtime, control lease, FFmpeg capture path, gRPC boundary, and fake-hardware integration tests.
-4. Build the Avalonia GUI with low-latency video, keyboard input, SDL controller mapping, device selection, daemon startup, and visible control ownership.
-5. Prove the full path on the NanoKVM-USB, nRF52840 bridge, and Switch 2. This completes the first release.
-6. Harden signed BLE updates, interrupted-update rollback, USB maintenance mode, packaging, and recovery documentation.
-7. Add the MCP server, latest-frame screenshots, bounded digital-input sequences, and interactive takeover. Analog automation remains later work.
+## Repository layout
 
-Each phase has a hardware or end-to-end result. A successful build alone does not complete a phase.
+```text
+src/                       .NET applications and libraries
+tests/                     domain, protocol, and integration tests
+firmware/                  nRF52840 controller-bridge firmware
+controller-personalities/  runtime USB controller definitions
+docs/                      architecture, decisions, and hardware notes
+tools/                     verification and hardware utilities
+.agents/skills/            agent operation and navigation guidance
+```
 
-## References
+Every .NET project has its own directory. Hardware-specific behavior stays behind adapters so future console personalities do not leak into the daemon's control policy.
 
-- [NanoKVM-USB](https://github.com/sipeed/NanoKVM-USB) documents the capture device and its stock CH9329 command path.
-- [OpenPuck](https://github.com/safijari/openpuck) demonstrates Switch-compatible Hori and Pro Controller behavior on an nRF52840. ConsoleControl implements its firmware independently rather than copying OpenPuck's AGPL source.
-- [Adafruit nRF52 Arduino](https://github.com/adafruit/Adafruit_nRF52_Arduino) provides the board support, TinyUSB integration, and Bluefruit interface to S140.
+## Firmware updates and recovery
+
+The installed UF2 bootloader remains the recovery path. A double reset exposes the UF2 volume even when an application image fails. Ordinary controller input and personality changes stay in RAM and do not write flash.
+
+Signed over-the-air updates, interrupted-update rollback, and USB maintenance updates remain planned work. ConsoleControl will not describe OTA as safe until power-loss and invalid-image recovery pass on the purchased boards.
+
+## Protocol and dependency provenance
+
+[NanoKVM-USB](https://github.com/sipeed/NanoKVM-USB) documents the capture device and its fixed CH9329 keyboard and mouse path. [OpenPuck](https://github.com/safijari/openpuck) was a research reference for Switch-compatible controller behavior on nRF52840 hardware. ConsoleControl implements that behavior independently and does not copy OpenPuck's AGPL source.
+
+Dependency notices will ship in `THIRD-PARTY-NOTICES.md` before the first public release.
 
 ## License
 
-ConsoleControl will be licensed under GPL-3.0-or-later. Dependency and firmware notices will be recorded when implementation begins.
+ConsoleControl is licensed under the GNU General Public License, version 3 or any later version. See [LICENSE](LICENSE).
