@@ -1,0 +1,57 @@
+model = "nice!nano"
+board_id = "nRF52840-nicenano"
+uf2_bootloader = "0.6.0"
+softdevice = "S140 6.1.1"
+observed_on = "2026-08-28"
+
+[flash]
+application_start = 0x00026000
+application_end_exclusive = 0x000F4000
+bootloader_start = 0x000F4000
+bootloader_settings_start = 0x000FF000
+
+[factory_image]
+source = "CURRENT.UF2"
+sha256 = "d8f67e56c14bce6efbce57939a6eedb7e269d3a367104c96eb497e7e1d059164"
+address_start = 0x00001000
+address_end_exclusive = 0x000AD000
+
+[cpp_usb_proof]
+observed_on = "2026-08-28"
+artifact_sha256 = "1ca7ba4620c869e0d71127bad9550867a013d63a3ee90033d797806cf7bdcc10"
+address_start = 0x00026000
+address_end_exclusive = 0x00033300
+usb_vendor_id = 0x0F0D
+usb_product_id = 0x0092
+usb_device_version = 0x0210
+usb_speed_mbps = 12
+manufacturer = "HORI CO.,LTD."
+product = "POKKEN CONTROLLER"
+linux_hid_bound = true
+
+[cpp_ble_usb_proof]
+observed_on = "2026-08-28"
+artifact_sha256 = "1caedd3ffe928a6bd4883b1b7c06328db861ea434237e6572d0f850851033491"
+address_start = 0x00026000
+address_end_exclusive = 0x00044E00
+ble_name = "ConsoleControl Proof"
+service_uuid = "cc7c0001-8f5d-4b8a-9f6e-4f5f4343544c"
+state_characteristic_uuid = "cc7c0002-8f5d-4b8a-9f6e-4f5f4343544c"
+usb_concurrent = true
+linux_button_event_observed = "BTN_SOUTH"
+neutral_timeout_ms = 250
+neutral_release_observed = true
+
+[cpp_switch_pro_candidate]
+built_on = "2026-08-28"
+artifact_sha256 = "46d822221e9128b880d8d10db138a1cc4bf59bfeeed2bb666a463d234ef686bc"
+address_start = 0x00026000
+address_end_exclusive = 0x00045B00
+usb_vendor_id = 0x057E
+usb_product_id = 0x2009
+usb_device_version = 0x0210
+linux_handshake_verified = true
+switch_2_verified = true
+diagnostic_characteristic_uuid = "cc7c0003-8f5d-4b8a-9f6e-4f5f4343544c"
+diagnostic_event_length = 20
+diagnostic_queue_capacity = 128
