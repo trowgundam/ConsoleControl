@@ -2,18 +2,17 @@
 
 ConsoleControl lets a local desktop application control a game console through a small controller bridge. The first target is a docked Nintendo Switch 2 connected through a NanoKVM-USB.
 
-The controller hardware proof has passed. The current desktop slice has daemon-backed Avalonia controls plus focused keyboard and SDL gamepad forwarding. Video capture remains later work.
+The controller hardware proof has passed. The current desktop slice has daemon-backed Avalonia controls, live video, focused keyboard and SDL gamepad forwarding, and a local MCP server for digital input automation.
 
 ## First release
 
-The first usable release contains two applications:
+The project contains three applications:
 
 - `ConsoleControl.Daemon` owns video capture, the controller bridge, configuration, and control arbitration.
 - `ConsoleControl.Gui` starts or connects to the daemon, displays live video, and forwards keyboard or physical-controller input.
+- `ConsoleControl.Mcp` exposes screenshots and bounded digital-input sequences to an MCP client over stdio.
 
-The first release supports one local console session, one NanoKVM-USB capture source, and one Hori-compatible Switch controller personality. It does not include remote access, audio, recording, motion, rumble, macros, or an MCP server.
-
-An MCP server is a later application. It will use the same daemon API to request screenshots and submit bounded input sequences. It will not consume the live video stream.
+The current release supports one local console session, selectable video capture, and one Switch Pro-compatible controller personality. It does not include remote access, audio, recording, motion, rumble, or analog automation.
 
 ## Hardware
 
@@ -108,6 +107,23 @@ Choose **Configure input mapping…** to open the modal mapping window. Click a 
 
 On-screen controls remain available with either forwarded source. Each click adds an 80 ms overlay without releasing buttons or axes held by the selected source. This temporary slice still uses explicit process startup, a fixed bridge address, and an unauthenticated loopback endpoint.
 
+The GUI starts as an observer. Choose **Take Control** to send input. If automation owns the control lease, this action stops its running sequence, sends a neutral controller state, and grants control to the GUI. Choose **Release Control** before automation can take control again.
+
+## Run the MCP server
+
+Start the daemon, then configure your MCP client to run:
+
+```sh
+dotnet run --project src/ConsoleControl.Mcp -- \
+  --daemon http://127.0.0.1:5041
+```
+
+The server exposes `console_request_control`, `console_get_screenshot`, `console_render_screenshot`, `console_press`, `console_hold`, and `console_run_sequence`. Call `console_request_control` with a nonblank reason before sending input. If the GUI has control, it displays that reason and lets the user release control or decline the request. An accepted automation lease remains active between input calls. A GUI takeover revokes it immediately. Input tools refuse commands until the agent requests control again.
+
+`console_get_screenshot` and `console_run_sequence` return `low` fidelity by default. `low` is at most 640×360. `medium` is at most 1280×720. `high` returns the exact original JPEG at its captured dimensions. Every screenshot result includes an opaque `screenshot_id`. Call `console_render_screenshot` with that ID to inspect the same frame at another fidelity. The MCP server retains at most 16 original screenshots and 64 MiB for five minutes. Expired or evicted IDs return an error that tells the caller to capture a new screenshot.
+
+Sequences accept at most 256 commands, run for at most 30 seconds, capture at most eight screenshots, and capture at most 32 MiB of original JPEG data. `press` advances the sequence time by its duration. `hold` schedules a release without advancing sequence time. `pause` advances sequence time while scheduled holds remain active. A failed screenshot stops the sequence, releases all buttons, and returns both earlier captures and the failed capture message. The `screenshotFidelity` argument selects the initial rendering for every successful capture. Each capture has its own ID and can be rendered again independently.
+
 Run the repeatable desktop checks with:
 
 ```sh
@@ -159,7 +175,7 @@ Each .NET project has its own directory. Firmware, controller-personality data, 
 4. Build the Avalonia GUI with low-latency video, keyboard input, SDL controller mapping, device selection, daemon startup, and visible control ownership.
 5. Prove the full path on the NanoKVM-USB, nRF52840 bridge, and Switch 2. This completes the first release.
 6. Harden signed BLE updates, interrupted-update rollback, USB maintenance mode, packaging, and recovery documentation.
-7. Add the MCP server, latest-frame screenshots, bounded input sequences, and interactive takeover.
+7. Add the MCP server, latest-frame screenshots, bounded digital-input sequences, and interactive takeover. Analog automation remains later work.
 
 Each phase has a hardware or end-to-end result. A successful build alone does not complete a phase.
 

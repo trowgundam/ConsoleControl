@@ -60,20 +60,44 @@
       <Image Source="{Binding VideoImage}" Stretch="Uniform" />
     </Border>
 
-    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="12">
-      <TextBlock Text="Input source" VerticalAlignment="Center" />
-      <ComboBox Width="300"
-                ItemsSource="{Binding InputSources}"
-                SelectedItem="{Binding SelectedInputSource, Mode=TwoWay}">
-        <ComboBox.ItemTemplate>
-          <DataTemplate x:DataType="local:InputSourceOption">
-            <TextBlock Text="{Binding DisplayName}" />
-          </DataTemplate>
-        </ComboBox.ItemTemplate>
-      </ComboBox>
+    <StackPanel Grid.Row="2" Spacing="10">
+      <Border IsVisible="{Binding HasPendingControlRequest}"
+              Padding="12"
+              CornerRadius="4"
+              BorderThickness="1"
+              BorderBrush="{DynamicResource SystemAccentColor}">
+        <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10" RowSpacing="6">
+          <StackPanel Grid.Column="0" Grid.RowSpan="2">
+            <TextBlock Text="An agent is requesting control" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding PendingControlRequestReason}" TextWrapping="Wrap" />
+          </StackPanel>
+          <Button Grid.Column="1" Grid.RowSpan="2"
+                  Content="Keep Control"
+                  Command="{Binding DeclineControlRequestCommand}" />
+          <Button Grid.Column="2" Grid.RowSpan="2"
+                  Content="Release Control"
+                  Command="{Binding ToggleControlCommand}" />
+        </Grid>
+      </Border>
+      <StackPanel Orientation="Horizontal" Spacing="12">
+        <Button Content="{Binding ControlActionText}"
+                Command="{Binding ToggleControlCommand}" />
+        <TextBlock Text="Input source" VerticalAlignment="Center" />
+        <ComboBox Width="300"
+                  IsEnabled="{Binding HasControl}"
+                  ItemsSource="{Binding InputSources}"
+                  SelectedItem="{Binding SelectedInputSource, Mode=TwoWay}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="local:InputSourceOption">
+              <TextBlock Text="{Binding DisplayName}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+      </StackPanel>
     </StackPanel>
 
-    <Grid Grid.Row="3" ColumnDefinitions="*,*,64,64,*,*" ColumnSpacing="8">
+    <Grid Grid.Row="3" ColumnDefinitions="*,*,64,64,*,*" ColumnSpacing="8"
+          IsEnabled="{Binding HasControl}">
       <Button Grid.Column="0" Classes="controller" Content="ZL"
               Command="{Binding PulseControlCommand}"
               CommandParameter="{x:Static core:CanonicalDigitalControl.LeftTrigger}" />
@@ -96,7 +120,8 @@
               CommandParameter="{x:Static core:CanonicalDigitalControl.RightTrigger}" />
     </Grid>
 
-    <Grid Grid.Row="4" ColumnDefinitions="1*,1.2*,1*" VerticalAlignment="Center">
+    <Grid Grid.Row="4" ColumnDefinitions="1*,1.2*,1*" VerticalAlignment="Center"
+          IsEnabled="{Binding HasControl}">
       <Grid Grid.Column="0" Width="180" Height="180"
             RowDefinitions="60,60,60" ColumnDefinitions="60,60,60"
             HorizontalAlignment="Center">
@@ -151,6 +176,7 @@
 
     <Button Grid.Row="5"
             HorizontalAlignment="Center"
+            IsEnabled="{Binding HasControl}"
             Content="Configure input mapping…"
             Click="OpenMapping_Click" />
 

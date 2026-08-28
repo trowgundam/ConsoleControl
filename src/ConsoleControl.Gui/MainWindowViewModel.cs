@@ -2,12 +2,14 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
-using ConsoleControl.Client;
-using ConsoleControl.Core;
-using ConsoleControl.Input.Sdl;
+
 using Avalonia.Input;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+
+using ConsoleControl.Client;
+using ConsoleControl.Core;
+using ConsoleControl.Input.Sdl;
 
 namespace ConsoleControl.Gui;
 
@@ -22,6 +24,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private Bitmap? _videoImage;
     private ulong _videoRevision;
     private bool _loadingVideoSources;
+    private InputConfiguration? _inputConfiguration;
+    private PendingControlRequest? _pendingControlRequest;
+    private readonly CancellationTokenSource _statusStop = new();
+    private Task? _statusTask;
     private string _videoStatusText = "Finding video sources...";
     private string _statusText = "Connecting to daemon...";
     private bool _disposed;
@@ -30,11 +36,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         _session = session;
         PulseControlCommand = new AsyncCommand<CanonicalDigitalControl>(PulseControlAsync);
+        ToggleControlCommand = new AsyncCommand(ToggleControlAsync);
+        DeclineControlRequestCommand = new AsyncCommand(DeclineControlRequestAsync);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public ICommand PulseControlCommand { get; }
+    public ICommand ToggleControlCommand { get; }
+    public ICommand DeclineControlRequestCommand { get; }
+
+    public bool HasControl => _control is not null;
+    public string ControlActionText => HasControl ? "Release Control" : "Take Control";
+    public bool HasPendingControlRequest => _pendingControlRequest is not null;
+    public string PendingControlRequestReason => _pendingControlRequest?.Reason ?? string.Empty;
 
     public ObservableCollection<InputSourceOption> InputSources { get; } = [];
     public ObservableCollection<VideoSource> VideoSources { get; } = [];
@@ -124,20 +139,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         try
         {
             ConsoleStatus status = await _session.GetStatusAsync(CancellationToken.None);
-            _control = await _session.TakeControlAsync(
-                ControlPriority.InteractiveUser,
-                CancellationToken.None);
-            InputConfiguration configuration =
-                await _session.GetInputConfigurationAsync(CancellationToken.None);
-            SdlGamepadManager gamepads = new();
-            _forwarder = new(_session, _control, gamepads, configuration);
-            _forwarder.SourcesChanged += OnSourcesChanged;
-            _forwarder.StatusChanged += OnForwardingStatusChanged;
-            RefreshInputSources();
-            SelectedInputSource = InputSources[0];
-            StatusText = status.BridgeConnected
-                ? FormatConnectionState(_control.ConnectionState)
-                : status.Detail;
+            _inputConfiguration = await _session.GetInputConfigurationAsync(CancellationToken.None);
+            StatusText = status.ControlAvailable
+                ? "Observing. Choose Take Control to send input."
+                : "Another client has control. Choose Take Control to preempt automation.";
+            ApplyPendingControlRequest(status.PendingControlRequest);
+            _statusTask = MonitorStatusAsync(_statusStop.Token);
         }
         catch (Exception exception)
         {
@@ -153,6 +160,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
 
         _disposed = true;
+        _statusStop.Cancel();
+        if (_statusTask is not null)
+        {
+            try
+            {
+                await _statusTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+        _statusStop.Dispose();
         if (_videoPresenter is not null)
         {
             await _videoPresenter.DisposeAsync();
@@ -214,6 +233,136 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return;
         }
         StatusText = "Ready";
+    }
+
+    private async Task ToggleControlAsync()
+    {
+        if (_control is null)
+        {
+            await TakeControlAsync();
+        }
+        else
+        {
+            await ReleaseControlAsync();
+        }
+    }
+
+    private async Task TakeControlAsync()
+    {
+        StatusText = "Taking control...";
+        try
+        {
+            _control = await _session.TakeControlAsync(
+                ControlPriority.InteractiveUser,
+                CancellationToken.None);
+            _inputConfiguration ??=
+                await _session.GetInputConfigurationAsync(CancellationToken.None);
+            _forwarder = new(
+                _session,
+                _control,
+                new SdlGamepadManager(),
+                _inputConfiguration);
+            _forwarder.SourcesChanged += OnSourcesChanged;
+            _forwarder.StatusChanged += OnForwardingStatusChanged;
+            RefreshInputSources();
+            SelectedInputSource = InputSources.FirstOrDefault();
+            StatusText = FormatConnectionState(_control.ConnectionState);
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"Could not take control: {exception.Message}";
+            if (_forwarder is not null)
+            {
+                await _forwarder.DisposeAsync();
+                _forwarder = null;
+            }
+            if (_control is not null)
+            {
+                await _control.DisposeAsync();
+                _control = null;
+            }
+        }
+        finally
+        {
+            OnPropertyChanged(nameof(HasControl));
+            OnPropertyChanged(nameof(ControlActionText));
+        }
+    }
+
+    private async Task ReleaseControlAsync()
+    {
+        StatusText = "Releasing control...";
+        if (_forwarder is not null)
+        {
+            InputForwarder forwarder = _forwarder;
+            _forwarder = null;
+            forwarder.SourcesChanged -= OnSourcesChanged;
+            forwarder.StatusChanged -= OnForwardingStatusChanged;
+            await forwarder.DisposeAsync();
+        }
+        if (_control is not null)
+        {
+            IControlSession control = _control;
+            _control = null;
+            await control.DisposeAsync();
+        }
+        InputSources.Clear();
+        _selectedInputSource = null;
+        OnPropertyChanged(nameof(SelectedInputSource));
+        OnPropertyChanged(nameof(HasControl));
+        OnPropertyChanged(nameof(ControlActionText));
+        StatusText = "Observing. Choose Take Control to send input.";
+    }
+
+    private async Task DeclineControlRequestAsync()
+    {
+        if (_pendingControlRequest is not { } request)
+        {
+            return;
+        }
+        try
+        {
+            await _session.DeclineControlRequestAsync(request.Id, CancellationToken.None);
+            ApplyPendingControlRequest(null);
+            StatusText = "Agent control request declined";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"Could not decline control request: {exception.Message}";
+        }
+    }
+
+    private async Task MonitorStatusAsync(CancellationToken cancellationToken)
+    {
+        using PeriodicTimer timer = new(TimeSpan.FromMilliseconds(500));
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            try
+            {
+                ConsoleStatus status = await _session.GetStatusAsync(cancellationToken);
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                    ApplyPendingControlRequest(status.PendingControlRequest));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch
+            {
+                // Existing video and control reconnect paths report daemon availability.
+            }
+        }
+    }
+
+    private void ApplyPendingControlRequest(PendingControlRequest? request)
+    {
+        if (_pendingControlRequest == request)
+        {
+            return;
+        }
+        _pendingControlRequest = request;
+        OnPropertyChanged(nameof(HasPendingControlRequest));
+        OnPropertyChanged(nameof(PendingControlRequestReason));
     }
 
     private static string GetLabel(CanonicalDigitalControl control) => control switch

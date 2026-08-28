@@ -11,6 +11,72 @@ service ConsoleControlService {
   rpc SaveInputProfile (SaveInputProfileRequest) returns (InputConfigurationReply);
   rpc GetVideoInventory (GetVideoInventoryRequest) returns (VideoInventoryReply);
   rpc SelectVideoSource (SelectVideoSourceRequest) returns (VideoSelectionReply);
+  rpc GetScreenshot (GetScreenshotRequest) returns (ScreenshotReply);
+  rpc RunAutomation (RunAutomationRequest) returns (AutomationResultReply);
+  rpc DeclineControlRequest (DeclineControlRequestMessage) returns (DeclineControlRequestReply);
+}
+
+message GetScreenshotRequest {}
+
+message ScreenshotReply {
+  uint64 generation = 1;
+  uint64 sequence = 2;
+  VideoModeMessage mode = 3;
+  int64 received_at_unix_ms = 4;
+  bytes jpeg = 5;
+}
+
+message AutomationPressMessage {
+  CanonicalDigitalControl control = 1;
+  uint32 duration_ms = 2;
+}
+
+message AutomationHoldMessage {
+  CanonicalDigitalControl control = 1;
+  uint32 duration_ms = 2;
+}
+
+message AutomationCaptureMessage { string name = 1; }
+
+message AutomationCommandMessage {
+  oneof body {
+    AutomationPressMessage press = 1;
+    AutomationHoldMessage hold = 2;
+    uint32 pause_ms = 3;
+    AutomationCaptureMessage capture = 4;
+  }
+}
+
+message RunAutomationRequest {
+  string client_id = 1;
+  uint64 lease_generation = 2;
+  bool capture_start = 3;
+  repeated AutomationCommandMessage commands = 4;
+  bool capture_end = 5;
+}
+
+enum AutomationOutcomeMessage {
+  AUTOMATION_OUTCOME_MESSAGE_UNSPECIFIED = 0;
+  AUTOMATION_OUTCOME_MESSAGE_COMPLETED = 1;
+  AUTOMATION_OUTCOME_MESSAGE_PREEMPTED = 2;
+  AUTOMATION_OUTCOME_MESSAGE_CANCELLED = 3;
+  AUTOMATION_OUTCOME_MESSAGE_BRIDGE_UNAVAILABLE = 4;
+  AUTOMATION_OUTCOME_MESSAGE_SCREENSHOT_FAILED = 5;
+}
+
+message AutomationCaptureReply {
+  string name = 1;
+  uint32 scheduled_at_ms = 2;
+  uint32 actual_at_ms = 3;
+  optional ScreenshotReply screenshot = 4;
+  optional string failure = 5;
+}
+
+message AutomationResultReply {
+  AutomationOutcomeMessage outcome = 1;
+  uint32 elapsed_ms = 2;
+  repeated AutomationCaptureReply captures = 3;
+  optional string detail = 4;
 }
 
 message GetVideoInventoryRequest {}
@@ -52,12 +118,18 @@ message GetStatusReply {
   bool bridge_connected = 1;
   bool control_available = 2;
   string detail = 3;
+  optional string pending_control_request_id = 4;
+  optional string pending_control_request_reason = 5;
 }
 
 message OpenControlStream {
   string client_id = 1;
   ControlPriority priority = 2;
+  optional string request_reason = 3;
 }
+
+message DeclineControlRequestMessage { string request_id = 1; }
+message DeclineControlRequestReply { bool declined = 1; }
 
 message ControlGranted {
   uint64 lease_generation = 1;
@@ -78,8 +150,11 @@ message ControlStreamRequest {
   oneof body {
     OpenControlStream open = 1;
     ControllerStateMessage state = 2;
+    ControlHeartbeat heartbeat = 3;
   }
 }
+
+message ControlHeartbeat {}
 
 message ControlStreamEvent {
   oneof body {

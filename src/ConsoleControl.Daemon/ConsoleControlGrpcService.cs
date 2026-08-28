@@ -1,16 +1,19 @@
 using System.Collections.Immutable;
+
 using ConsoleControl.Contracts;
 using ConsoleControl.Core;
+
 using Grpc.Core;
-using ContractPriority = ConsoleControl.Contracts.ControlPriority;
-using DomainPriority = ConsoleControl.Core.ControlPriority;
+
 using ContractDigital = ConsoleControl.Contracts.CanonicalDigitalControl;
-using DomainDigital = ConsoleControl.Core.CanonicalDigitalControl;
+using ContractPriority = ConsoleControl.Contracts.ControlPriority;
 using ContractSourceKind = ConsoleControl.Contracts.InputSourceKind;
-using DomainSourceKind = ConsoleControl.Core.InputSourceKind;
 using ContractStick = ConsoleControl.Contracts.CanonicalStick;
-using DomainStick = ConsoleControl.Core.CanonicalStick;
 using ContractTrigger = ConsoleControl.Contracts.CanonicalTrigger;
+using DomainDigital = ConsoleControl.Core.CanonicalDigitalControl;
+using DomainPriority = ConsoleControl.Core.ControlPriority;
+using DomainSourceKind = ConsoleControl.Core.InputSourceKind;
+using DomainStick = ConsoleControl.Core.CanonicalStick;
 using DomainTrigger = ConsoleControl.Core.CanonicalTrigger;
 
 namespace ConsoleControl.Daemon;
@@ -18,18 +21,27 @@ namespace ConsoleControl.Daemon;
 internal sealed class ConsoleControlGrpcService(
     ConsoleRuntime runtime,
     InputProfileStore inputProfiles,
-    VideoRuntime video)
+    VideoRuntime video,
+    AutomationRuntime automation)
     : ConsoleControlService.ConsoleControlServiceBase
 {
     public override Task<GetStatusReply> GetStatus(
         GetStatusRequest request,
-        ServerCallContext context) =>
-        Task.FromResult(new GetStatusReply
+        ServerCallContext context)
+    {
+        GetStatusReply reply = new()
         {
             BridgeConnected = runtime.BridgeConnected,
             ControlAvailable = runtime.ControlAvailable,
             Detail = runtime.BridgeConnected ? "Controller bridge connected" : "Controller bridge disconnected",
-        });
+        };
+        if (runtime.PendingControlRequest is { } pending)
+        {
+            reply.PendingControlRequestId = pending.Id.ToString("D");
+            reply.PendingControlRequestReason = pending.Reason;
+        }
+        return Task.FromResult(reply);
+    }
 
     public override async Task Control(
         IAsyncStreamReader<ControlStreamRequest> requestStream,
@@ -55,18 +67,33 @@ internal sealed class ConsoleControlGrpcService(
                 ContractPriority.InteractiveUser => DomainPriority.InteractiveUser,
                 _ => throw InvalidArgument("A control priority is required."),
             };
-            lease = await runtime.AcquireControlAsync(
-                client,
-                priority,
-                context.CancellationToken).ConfigureAwait(false);
+            lease = priority == DomainPriority.Automation
+                ? await runtime.RequestAutomationControlAsync(
+                    client,
+                    open.HasRequestReason ? open.RequestReason : string.Empty,
+                    context.CancellationToken).ConfigureAwait(false)
+                : await runtime.AcquireControlAsync(
+                    client,
+                    priority,
+                    context.CancellationToken).ConfigureAwait(false);
             await responseStream.WriteAsync(new ControlStreamEvent
             {
                 Granted = new ControlGranted { LeaseGeneration = lease.Generation.Value },
             }, context.CancellationToken).ConfigureAwait(false);
 
-            while (await MoveNextWithInactivityTimeoutAsync(requestStream, context.CancellationToken)
+            CancellationToken revoked = await runtime.GetRevocationTokenAsync(
+                client, lease.Generation, context.CancellationToken).ConfigureAwait(false);
+            using CancellationTokenSource streamLifetime =
+                CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken, revoked);
+
+            while (await MoveNextWithInactivityTimeoutAsync(requestStream, streamLifetime.Token)
                        .ConfigureAwait(false))
             {
+                if (requestStream.Current.BodyCase == ControlStreamRequest.BodyOneofCase.Heartbeat &&
+                    lease.Priority == DomainPriority.Automation)
+                {
+                    continue;
+                }
                 if (requestStream.Current.BodyCase != ControlStreamRequest.BodyOneofCase.State)
                 {
                     throw InvalidArgument("A control stream may contain only one open message.");
@@ -75,12 +102,39 @@ internal sealed class ConsoleControlGrpcService(
                     client,
                     lease.Generation,
                     ParseState(requestStream.Current.State),
-                    context.CancellationToken).ConfigureAwait(false);
+                    streamLifetime.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (
+            lease is not null && !context.CancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await responseStream.WriteAsync(new ControlStreamEvent
+                {
+                    Condition = ControlCondition.LeaseRevoked,
+                }, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch
+            {
+                // The generation is already revoked; cleanup remains authoritative.
             }
         }
         catch (ControlConflictException exception)
         {
             throw new RpcException(new Status(StatusCode.Aborted, exception.Message));
+        }
+        catch (ControlRequestDeclinedException exception)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, exception.Message));
+        }
+        catch (ControlRequestTimedOutException exception)
+        {
+            throw new RpcException(new Status(StatusCode.DeadlineExceeded, exception.Message));
+        }
+        catch (ArgumentException exception)
+        {
+            throw InvalidArgument(exception.Message);
         }
         catch (StaleControlLeaseException exception)
         {
@@ -190,6 +244,66 @@ internal sealed class ConsoleControlGrpcService(
         }
     }
 
+    public override Task<ScreenshotReply> GetScreenshot(
+        GetScreenshotRequest request,
+        ServerCallContext context)
+    {
+        try
+        {
+            return Task.FromResult(ToReply(video.CaptureLatest()));
+        }
+        catch (ScreenshotUnavailableException exception)
+        {
+            throw new RpcException(new Status(StatusCode.Unavailable, exception.Message));
+        }
+    }
+
+    public override async Task<AutomationResultReply> RunAutomation(
+        RunAutomationRequest request,
+        ServerCallContext context)
+    {
+        try
+        {
+            AutomationResult result = await automation.ExecuteAsync(
+                ParseClient(request.ClientId),
+                new LeaseGeneration(request.LeaseGeneration),
+                ParseAutomation(request),
+                context.CancellationToken).ConfigureAwait(false);
+            return ToReply(result);
+        }
+        catch (ArgumentException exception)
+        {
+            throw InvalidArgument(exception.Message);
+        }
+        catch (OverflowException exception)
+        {
+            throw InvalidArgument(exception.Message);
+        }
+        catch (AutomationBusyException exception)
+        {
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, exception.Message));
+        }
+        catch (StaleControlLeaseException exception)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, exception.Message));
+        }
+    }
+
+    public override async Task<DeclineControlRequestReply> DeclineControlRequest(
+        DeclineControlRequestMessage request,
+        ServerCallContext context)
+    {
+        if (!Guid.TryParse(request.RequestId, out Guid requestId))
+        {
+            throw InvalidArgument("request_id must be a GUID.");
+        }
+        return new()
+        {
+            Declined = await runtime.DeclineControlRequestAsync(
+                requestId, context.CancellationToken).ConfigureAwait(false),
+        };
+    }
+
     private static ClientId ParseClient(string value) =>
         Guid.TryParse(value, out Guid parsed)
             ? new ClientId(parsed)
@@ -227,6 +341,75 @@ internal sealed class ConsoleControlGrpcService(
 
     private static RpcException InvalidArgument(string detail) =>
         new(new Status(StatusCode.InvalidArgument, detail));
+
+    private static AutomationSequence ParseAutomation(RunAutomationRequest request) => new(
+        request.Commands.Select(ParseAutomationCommand).ToImmutableArray(),
+        request.CaptureStart,
+        request.CaptureEnd);
+
+    private static AutomationCommand ParseAutomationCommand(AutomationCommandMessage message) =>
+        message.BodyCase switch
+        {
+            AutomationCommandMessage.BodyOneofCase.Press => new AutomationCommand.Press(
+                ParseEnum<DomainDigital, ContractDigital>(message.Press.Control),
+                Milliseconds(message.Press.DurationMs)),
+            AutomationCommandMessage.BodyOneofCase.Hold => new AutomationCommand.Hold(
+                ParseEnum<DomainDigital, ContractDigital>(message.Hold.Control),
+                Milliseconds(message.Hold.DurationMs)),
+            AutomationCommandMessage.BodyOneofCase.PauseMs =>
+                new AutomationCommand.Pause(Milliseconds(message.PauseMs)),
+            AutomationCommandMessage.BodyOneofCase.Capture =>
+                new AutomationCommand.Capture(message.Capture.Name),
+            _ => throw InvalidArgument("Every automation command needs a body."),
+        };
+
+    private static TimeSpan Milliseconds(uint value) => TimeSpan.FromMilliseconds(value);
+
+    private static ScreenshotReply ToReply(Screenshot screenshot) => new()
+    {
+        Generation = screenshot.Generation,
+        Sequence = screenshot.Sequence,
+        Mode = new VideoModeMessage
+        {
+            Width = screenshot.Mode.Width,
+            Height = screenshot.Mode.Height,
+            FramesPerSecond = screenshot.Mode.FramesPerSecond,
+        },
+        ReceivedAtUnixMs = screenshot.ReceivedAt.ToUnixTimeMilliseconds(),
+        Jpeg = Google.Protobuf.ByteString.CopyFrom(screenshot.Jpeg),
+    };
+
+    private static AutomationResultReply ToReply(AutomationResult result)
+    {
+        AutomationResultReply reply = new()
+        {
+            Outcome = (AutomationOutcomeMessage)((int)result.Outcome + 1),
+            ElapsedMs = checked((uint)Math.Ceiling(result.Elapsed.TotalMilliseconds)),
+        };
+        if (result.Detail is not null)
+        {
+            reply.Detail = result.Detail;
+        }
+        reply.Captures.AddRange(result.Captures.Select(capture =>
+        {
+            AutomationCaptureReply item = new()
+            {
+                Name = capture.Name,
+                ScheduledAtMs = checked((uint)Math.Ceiling(capture.ScheduledAt.TotalMilliseconds)),
+                ActualAtMs = checked((uint)Math.Ceiling(capture.ActualAt.TotalMilliseconds)),
+            };
+            if (capture.Screenshot is not null)
+            {
+                item.Screenshot = ToReply(capture.Screenshot);
+            }
+            if (capture.Failure is not null)
+            {
+                item.Failure = capture.Failure;
+            }
+            return item;
+        }));
+        return reply;
+    }
 
     private static InputProfile ParseProfile(InputProfileMessage message)
     {

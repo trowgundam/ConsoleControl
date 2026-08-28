@@ -1,14 +1,17 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Net;
-using System.Collections.Immutable;
+
 using ConsoleControl.Client;
 using ConsoleControl.Contracts;
 using ConsoleControl.Controller.Bluetooth;
 using ConsoleControl.Core;
 using ConsoleControl.Daemon;
 using ConsoleControl.Video.FFmpeg;
+
 using Grpc.Core;
 using Grpc.Net.Client;
+
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -35,6 +38,10 @@ internal static class StreamingTransportChecks
         builder.Services.AddSingleton(new VideoSelectionStore(profilePath + ".video"));
         builder.Services.AddSingleton(new VideoStreamAddress(new Uri("http://127.0.0.1/video.mjpeg")));
         builder.Services.AddSingleton<VideoRuntime>();
+        builder.Services.AddSingleton<IScreenshotSource>(services =>
+            services.GetRequiredService<VideoRuntime>());
+        builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<AutomationRuntime>();
 
         await using WebApplication app = builder.Build();
         app.MapGrpcService<ConsoleControlGrpcService>();
@@ -47,6 +54,9 @@ internal static class StreamingTransportChecks
             await VerifyCoalescingAndNeutralBarrierAsync(address, output);
             await VerifyAbruptCancellationAsync(address, output, app.Services.GetRequiredService<ConsoleRuntime>());
             await VerifyInactivityCleanupAsync(address, output, app.Services.GetRequiredService<ConsoleRuntime>());
+            await VerifyAutomationLeaseLifetimeAsync(
+                address, app.Services.GetRequiredService<ConsoleRuntime>());
+            await VerifyControlRequestAsync(address);
         }
         finally
         {
@@ -56,6 +66,68 @@ internal static class StreamingTransportChecks
                 File.Delete(profilePath);
             }
         }
+    }
+
+    private static async Task VerifyAutomationLeaseLifetimeAsync(
+        Uri address,
+        ConsoleRuntime runtime)
+    {
+        await using GrpcConsoleSession session = GrpcConsoleSession.Connect(address);
+        IAutomationSession control = await session.RequestAutomationControlAsync(
+            "Verify lease heartbeats.", CancellationToken.None);
+        Require(!runtime.ControlAvailable, "automation did not acquire the control lease");
+        await Task.Delay(TimeSpan.FromMilliseconds(1200));
+        Require(!runtime.ControlAvailable, "automation heartbeats did not retain the control lease");
+        await control.DisposeAsync();
+        await WaitUntilAsync(() => runtime.ControlAvailable, TimeSpan.FromSeconds(1));
+    }
+
+    private static async Task VerifyControlRequestAsync(Uri address)
+    {
+        await using GrpcConsoleSession gui = GrpcConsoleSession.Connect(address);
+        await using GrpcConsoleSession agent = GrpcConsoleSession.Connect(address);
+        IControlSession guiControl = await gui.TakeControlAsync(
+            ConsoleControl.Core.ControlPriority.InteractiveUser,
+            CancellationToken.None);
+
+        Task<IAutomationSession> declinedRequest = agent.RequestAutomationControlAsync(
+            "Test the visible request reason.", CancellationToken.None);
+        PendingControlRequest pending = await WaitForPendingRequestAsync(gui);
+        Require(pending.Reason == "Test the visible request reason.",
+            "the daemon did not preserve the agent's control request reason");
+        Require(await gui.DeclineControlRequestAsync(pending.Id, CancellationToken.None),
+            "the GUI client could not decline the pending request");
+        try
+        {
+            await declinedRequest;
+            throw new InvalidOperationException("a declined automation request acquired control");
+        }
+        catch (RpcException exception) when (exception.StatusCode == StatusCode.PermissionDenied)
+        {
+        }
+
+        Task<IAutomationSession> approvedRequest = agent.RequestAutomationControlAsync(
+            "Continue the integration check.", CancellationToken.None);
+        await WaitForPendingRequestAsync(gui);
+        await guiControl.DisposeAsync();
+        IAutomationSession automation = await approvedRequest.WaitAsync(TimeSpan.FromSeconds(1));
+        await automation.DisposeAsync();
+    }
+
+    private static async Task<PendingControlRequest> WaitForPendingRequestAsync(
+        GrpcConsoleSession session)
+    {
+        Stopwatch elapsed = Stopwatch.StartNew();
+        while (elapsed.Elapsed < TimeSpan.FromSeconds(1))
+        {
+            ConsoleStatus status = await session.GetStatusAsync(CancellationToken.None);
+            if (status.PendingControlRequest is { } pending)
+            {
+                return pending;
+            }
+            await Task.Delay(10);
+        }
+        throw new InvalidOperationException("the control request did not appear in daemon status");
     }
 
     private static async Task VerifyCoalescingAndNeutralBarrierAsync(Uri address, RecordingOutput output)

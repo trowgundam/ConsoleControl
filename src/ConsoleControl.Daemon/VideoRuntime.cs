@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+
 using ConsoleControl.Core;
 using ConsoleControl.Video.FFmpeg;
 
@@ -7,7 +8,7 @@ namespace ConsoleControl.Daemon;
 internal sealed class VideoRuntime(
     IVideoCaptureAdapter adapter,
     VideoSelectionStore store,
-    VideoStreamAddress streamAddress) : IAsyncDisposable
+    VideoStreamAddress streamAddress) : IAsyncDisposable, IScreenshotSource
 {
     private readonly SemaphoreSlim _selectionGate = new(1, 1);
     private readonly LatestFrameHub _frames = new();
@@ -87,6 +88,8 @@ internal sealed class VideoRuntime(
     }
 
     public VideoFrameSubscription Subscribe() => _frames.Subscribe();
+
+    public Screenshot CaptureLatest() => _frames.CopyLatest();
 
     public async ValueTask DisposeAsync()
     {
@@ -257,6 +260,8 @@ internal readonly record struct LatestFrame(ulong Revision, EncodedVideoFrame Fr
 
 internal sealed class VideoStreamInterruptedException : Exception;
 
+internal sealed class ScreenshotUnavailableException(string message) : Exception(message);
+
 internal sealed class VideoFrameSubscription(
     LatestFrameHub hub,
     ulong interruption)
@@ -305,6 +310,24 @@ internal sealed class LatestFrameHub
         lock (_gate)
         {
             return new(this, _interruption);
+        }
+    }
+
+    public Screenshot CopyLatest()
+    {
+        lock (_gate)
+        {
+            if (_latest is null)
+            {
+                throw new ScreenshotUnavailableException("No current video frame is available.");
+            }
+
+            return new Screenshot(
+                _latest.Generation,
+                _latest.Sequence,
+                _latest.Mode,
+                _latest.ReceivedAt,
+                _latest.Jpeg.ToArray());
         }
     }
 

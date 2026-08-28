@@ -9,7 +9,7 @@ ConsoleControl concentrates console lifecycle in one daemon session. Capture, in
 ```text
 NanoKVM UVC -> FFmpeg capture -> latest decoded frame -> capacity-one subscriber -> GUI renderer
                                       |
-                                      +-> retained latest frame -> future screenshot request
+                                      +-> retained latest frame -> screenshot request
 ```
 
 Capture never waits for a client. Each subscriber owns one pending-frame slot. Publishing a new frame replaces a stale pending frame. The retained latest frame uses reference-counted immutable storage so screenshot encoding cannot block capture.
@@ -104,7 +104,7 @@ public interface IControlSession : IAsyncDisposable
 }
 ```
 
-Screenshot capture, bounded sequences, and firmware maintenance enter the public interface when their product phases begin. Generated protobuf types do not cross this interface.
+Screenshot capture and bounded digital-input sequences use separate client operations. The daemon compiles each sequence into an absolute timeline and remains the only controller writer. Generated protobuf types do not cross the client interface.
 
 ## Daemon ownership
 

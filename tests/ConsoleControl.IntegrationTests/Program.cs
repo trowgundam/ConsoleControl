@@ -1,7 +1,8 @@
+using System.Collections.Immutable;
+
 using ConsoleControl.Controller.Bluetooth;
 using ConsoleControl.Core;
 using ConsoleControl.Daemon;
-using System.Collections.Immutable;
 
 if (args is ["verify-mjpeg", string multipartPath])
 {
@@ -13,6 +14,27 @@ if (args is ["verify-mjpeg", string multipartPath])
 if (args is ["video-latency", string daemonUri, string streamUri])
 {
     await VideoLatencyProbe.RunAsync(new Uri(daemonUri), new Uri(streamUri));
+    return;
+}
+
+if (args is ["automation"])
+{
+    await AutomationChecks.RunAsync();
+    Console.WriteLine("automation checks: passed");
+    return;
+}
+
+if (args is ["screenshots"])
+{
+    ScreenshotLibraryChecks.Run();
+    Console.WriteLine("screenshot library checks: passed");
+    return;
+}
+
+if (args is ["streaming"])
+{
+    await StreamingTransportChecks.RunAsync();
+    Console.WriteLine("streaming transport: passed");
     return;
 }
 
@@ -143,6 +165,8 @@ finally
 await StreamingTransportChecks.RunAsync();
 VideoRuntimeChecks.VerifyJpegDimensions();
 await VideoRuntimeChecks.RunAsync();
+await AutomationChecks.RunAsync();
+ScreenshotLibraryChecks.Run();
 
 FakeControllerOutput output = new();
 await using ConsoleRuntime runtime = new(output);
@@ -185,6 +209,8 @@ Console.WriteLine("input profile persistence: passed");
 Console.WriteLine("streaming transport: passed");
 Console.WriteLine("video runtime: passed");
 Console.WriteLine("JPEG dimensions: passed");
+Console.WriteLine("automation timeline: passed");
+Console.WriteLine("interactive takeover: passed");
 
 static void AssertEncoding(ControllerState state, byte[] expected, string name)
 {

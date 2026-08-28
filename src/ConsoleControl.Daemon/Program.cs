@@ -1,14 +1,18 @@
 using System.Net;
 using System.Text;
+
 using ConsoleControl.Controller.Bluetooth;
 using ConsoleControl.Core;
 using ConsoleControl.Daemon;
 using ConsoleControl.Video.FFmpeg;
+
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 
 DaemonOptions options = DaemonOptions.Parse(args);
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 builder.Logging.AddFilter("Grpc.AspNetCore.Server.ServerCallHandler", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Routing.EndpointMiddleware", LogLevel.Warning);
 builder.WebHost.ConfigureKestrel(kestrel =>
 {
     kestrel.Listen(IPAddress.Loopback, options.Port, listen =>
@@ -27,6 +31,10 @@ builder.Services.AddSingleton<VideoSelectionStore>();
 builder.Services.AddSingleton(new VideoStreamAddress(
     new Uri($"http://127.0.0.1:{options.VideoPort}/video/live.mjpeg")));
 builder.Services.AddSingleton<VideoRuntime>();
+builder.Services.AddSingleton<IScreenshotSource>(services =>
+    services.GetRequiredService<VideoRuntime>());
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<AutomationRuntime>();
 
 WebApplication app = builder.Build();
 app.MapGrpcService<ConsoleControlGrpcService>();

@@ -1,18 +1,21 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+
 using ConsoleControl.Contracts;
 using ConsoleControl.Core;
+
 using Grpc.Core;
 using Grpc.Net.Client;
-using ContractPriority = ConsoleControl.Contracts.ControlPriority;
-using DomainPriority = ConsoleControl.Core.ControlPriority;
+
 using ContractDigital = ConsoleControl.Contracts.CanonicalDigitalControl;
-using DomainDigital = ConsoleControl.Core.CanonicalDigitalControl;
+using ContractPriority = ConsoleControl.Contracts.ControlPriority;
 using ContractSourceKind = ConsoleControl.Contracts.InputSourceKind;
-using DomainSourceKind = ConsoleControl.Core.InputSourceKind;
 using ContractStick = ConsoleControl.Contracts.CanonicalStick;
-using DomainStick = ConsoleControl.Core.CanonicalStick;
 using ContractTrigger = ConsoleControl.Contracts.CanonicalTrigger;
+using DomainDigital = ConsoleControl.Core.CanonicalDigitalControl;
+using DomainPriority = ConsoleControl.Core.ControlPriority;
+using DomainSourceKind = ConsoleControl.Core.InputSourceKind;
+using DomainStick = ConsoleControl.Core.CanonicalStick;
 using DomainTrigger = ConsoleControl.Core.CanonicalTrigger;
 
 namespace ConsoleControl.Client;
@@ -24,6 +27,7 @@ public sealed class GrpcConsoleSession : IConsoleSession
     private readonly ClientId _clientId = new(Guid.NewGuid());
     private bool _disposed;
     private GrpcControlSession? _control;
+    private GrpcAutomationSession? _automation;
 
     private GrpcConsoleSession(Uri daemonUri)
     {
@@ -44,7 +48,12 @@ public sealed class GrpcConsoleSession : IConsoleSession
         GetStatusReply reply = await _client.GetStatusAsync(
             new GetStatusRequest(),
             cancellationToken: cancellationToken);
-        return new ConsoleStatus(reply.BridgeConnected, reply.ControlAvailable, reply.Detail);
+        PendingControlRequest? pending = reply.HasPendingControlRequestId &&
+                                         reply.HasPendingControlRequestReason &&
+                                         Guid.TryParse(reply.PendingControlRequestId, out Guid requestId)
+            ? new(requestId, reply.PendingControlRequestReason)
+            : null;
+        return new ConsoleStatus(reply.BridgeConnected, reply.ControlAvailable, reply.Detail, pending);
     }
 
     public async Task<InputConfiguration> GetInputConfigurationAsync(
@@ -118,6 +127,48 @@ public sealed class GrpcConsoleSession : IConsoleSession
         return _control;
     }
 
+    public async Task<Screenshot> GetScreenshotAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ScreenshotReply reply = await _client.GetScreenshotAsync(
+            new GetScreenshotRequest(), cancellationToken: cancellationToken);
+        return ParseScreenshot(reply);
+    }
+
+    public async Task<IAutomationSession> RequestAutomationControlAsync(
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_control is not null || _automation is not null)
+        {
+            throw new InvalidOperationException("This client already has a control session.");
+        }
+
+        _automation = new(_client, _clientId, reason, OnAutomationReleased);
+        try
+        {
+            await _automation.StartAsync(cancellationToken).ConfigureAwait(false);
+            return _automation;
+        }
+        catch
+        {
+            await _automation.DisposeAsync().ConfigureAwait(false);
+            _automation = null;
+            throw;
+        }
+    }
+
+    public async Task<bool> DeclineControlRequestAsync(
+        Guid requestId,
+        CancellationToken cancellationToken)
+    {
+        DeclineControlRequestReply reply = await _client.DeclineControlRequestAsync(
+            new DeclineControlRequestMessage { RequestId = requestId.ToString("D") },
+            cancellationToken: cancellationToken);
+        return reply.Declined;
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -131,8 +182,21 @@ public sealed class GrpcConsoleSession : IConsoleSession
             await _control.DisposeAsync().ConfigureAwait(false);
             _control = null;
         }
+        if (_automation is not null)
+        {
+            await _automation.DisposeAsync().ConfigureAwait(false);
+            _automation = null;
+        }
 
         await _channel.ShutdownAsync().ConfigureAwait(false);
+    }
+
+    private void OnAutomationReleased(GrpcAutomationSession released)
+    {
+        if (ReferenceEquals(_automation, released))
+        {
+            _automation = null;
+        }
     }
 
     private void OnControlReleased(GrpcControlSession released)
@@ -219,6 +283,174 @@ public sealed class GrpcConsoleSession : IConsoleSession
         Inverted = transform.Inverted,
         Scale = transform.Scale,
     };
+
+    private static Screenshot ParseScreenshot(ScreenshotReply reply) => new(
+        reply.Generation,
+        reply.Sequence,
+        new(
+            checked((ushort)reply.Mode.Width),
+            checked((ushort)reply.Mode.Height),
+            checked((ushort)reply.Mode.FramesPerSecond)),
+        DateTimeOffset.FromUnixTimeMilliseconds(reply.ReceivedAtUnixMs),
+        reply.Jpeg.ToByteArray());
+
+    private sealed class GrpcAutomationSession(
+        ConsoleControlService.ConsoleControlServiceClient client,
+        ClientId clientId,
+        string reason,
+        Action<GrpcAutomationSession> onReleased) : IAutomationSession
+    {
+        private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromMilliseconds(500);
+        private readonly CancellationTokenSource _stop = new();
+        private AsyncDuplexStreamingCall<ControlStreamRequest, ControlStreamEvent>? _call;
+        private Task? _lifetime;
+        private LeaseGeneration _generation;
+        private bool _disposed;
+
+        public async Task StartAsync(CancellationToken cancellationToken)
+        {
+            _call = client.Control(cancellationToken: _stop.Token);
+            await _call.RequestStream.WriteAsync(new ControlStreamRequest
+            {
+                Open = new OpenControlStream
+                {
+                    ClientId = clientId.Value.ToString("D"),
+                    Priority = ContractPriority.Automation,
+                    RequestReason = reason,
+                },
+            }, cancellationToken).ConfigureAwait(false);
+            if (!await _call.ResponseStream.MoveNext(cancellationToken).ConfigureAwait(false) ||
+                _call.ResponseStream.Current.BodyCase != ControlStreamEvent.BodyOneofCase.Granted)
+            {
+                throw new RpcException(new Status(StatusCode.Unavailable,
+                    "The daemon did not grant automation control."));
+            }
+            _generation = new(_call.ResponseStream.Current.Granted.LeaseGeneration);
+            _lifetime = MaintainLeaseAsync(_stop.Token);
+        }
+
+        public async Task<AutomationResult> RunAsync(
+            AutomationSequence sequence,
+            CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            sequence.Compile();
+            RunAutomationRequest request = new()
+            {
+                ClientId = clientId.Value.ToString("D"),
+                LeaseGeneration = _generation.Value,
+                CaptureStart = sequence.CaptureStart,
+                CaptureEnd = sequence.CaptureEnd,
+            };
+            request.Commands.AddRange(sequence.Commands.Select(ToMessage));
+            AutomationResultReply reply = await client.RunAutomationAsync(
+                request, cancellationToken: cancellationToken);
+            return new(
+                (AutomationOutcome)((int)reply.Outcome - 1),
+                TimeSpan.FromMilliseconds(reply.ElapsedMs),
+                reply.Captures.Select(ParseCapture).ToImmutableArray(),
+                reply.HasDetail ? reply.Detail : null);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+            _disposed = true;
+            _stop.Cancel();
+            try
+            {
+                if (_lifetime is not null)
+                {
+                    await _lifetime.ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                // Closing the stream still makes daemon cleanup authoritative.
+            }
+            _call?.Dispose();
+            _stop.Dispose();
+            onReleased(this);
+        }
+
+        private async Task MaintainLeaseAsync(CancellationToken cancellationToken)
+        {
+            Task send = SendHeartbeatsAsync(cancellationToken);
+            Task receive = WatchResponsesAsync(cancellationToken);
+            await Task.WhenAny(send, receive).ConfigureAwait(false);
+            _stop.Cancel();
+            try
+            {
+                await Task.WhenAll(send, receive).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        private async Task SendHeartbeatsAsync(CancellationToken cancellationToken)
+        {
+            using PeriodicTimer timer = new(HeartbeatInterval);
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            {
+                await _call!.RequestStream.WriteAsync(new ControlStreamRequest
+                {
+                    Heartbeat = new ControlHeartbeat(),
+                }, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        private async Task WatchResponsesAsync(CancellationToken cancellationToken)
+        {
+            while (await _call!.ResponseStream.MoveNext(cancellationToken).ConfigureAwait(false))
+            {
+                if (_call.ResponseStream.Current.BodyCase ==
+                    ControlStreamEvent.BodyOneofCase.Condition)
+                {
+                    return;
+                }
+            }
+        }
+
+        private static AutomationCommandMessage ToMessage(AutomationCommand command) => command switch
+        {
+            AutomationCommand.Press press => new()
+            {
+                Press = new()
+                {
+                    Control = (ContractDigital)press.Control,
+                    DurationMs = checked((uint)press.Duration.TotalMilliseconds),
+                },
+            },
+            AutomationCommand.Hold hold => new()
+            {
+                Hold = new()
+                {
+                    Control = (ContractDigital)hold.Control,
+                    DurationMs = checked((uint)hold.Duration.TotalMilliseconds),
+                },
+            },
+            AutomationCommand.Pause pause => new()
+            {
+                PauseMs = checked((uint)pause.Duration.TotalMilliseconds),
+            },
+            AutomationCommand.Capture capture => new()
+            {
+                Capture = new() { Name = capture.Name },
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+
+        private static AutomationCapture ParseCapture(AutomationCaptureReply reply) => new(
+            reply.Name,
+            TimeSpan.FromMilliseconds(reply.ScheduledAtMs),
+            TimeSpan.FromMilliseconds(reply.ActualAtMs),
+            reply.Screenshot is not null ? ParseScreenshot(reply.Screenshot) : null,
+            reply.HasFailure ? reply.Failure : null);
+    }
 
     private sealed class GrpcControlSession(
         ConsoleControlService.ConsoleControlServiceClient client,

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Threading.Channels;
+
 using ConsoleControl.Core;
 using ConsoleControl.Daemon;
 using ConsoleControl.Video.FFmpeg;
@@ -37,6 +38,11 @@ internal static class VideoRuntimeChecks
             EncodedVideoFrame latest = await subscription.WaitForNextAsync(CancellationToken.None);
             Require(latest.Jpeg[2] == 3,
                 "the video hub retained a stale frame instead of the newest frame");
+            Screenshot firstCopy = runtime.CaptureLatest();
+            firstCopy.Jpeg[2] = 0x7F;
+            Screenshot secondCopy = runtime.CaptureLatest();
+            Require(secondCopy.Jpeg[2] == 3,
+                "a screenshot caller could mutate the retained video frame");
 
             adapter.Available = false;
             session.Complete();
