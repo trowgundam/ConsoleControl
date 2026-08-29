@@ -44,7 +44,7 @@ flowchart LR
     Agent <-- stdio --> MCP
 ```
 
-The daemon owns capture, the controller bridge, device selection, and control arbitration. The GUI and MCP server are clients. Only one client can send controller input at a time, but every client may continue to observe video.
+The daemon owns capture, the controller bridge, device selection, and control arbitration. The GUI and MCP server are cooperating clients. The daemon grants one of those clients input control at a time, but every client may continue to observe video. The proof firmware does not authenticate BLE centrals, so a nearby BLE device can bypass daemon arbitration. See [Local trust boundary](#local-trust-boundary).
 
 See [the architecture](docs/architecture.md), [the domain language](CONTEXT.md), and [the accepted design decisions](docs/adr/) for the implementation boundaries.
 
@@ -142,7 +142,9 @@ Agents can use [the ConsoleControl operation skill](.agents/skills/operate-conso
 
 ## Local trust boundary
 
-The daemon accepts unauthenticated gRPC and MJPEG connections from the local machine. It rejects non-loopback listener addresses, so it is not remotely reachable through its supported command-line options. Any process running as any local user may still observe video or request control. Run ConsoleControl only on a machine whose local processes you trust. Remote access or a multi-user deployment requires a new authenticated transport design.
+The daemon accepts unauthenticated gRPC and MJPEG connections from the local machine. It rejects non-loopback listener addresses, so it is not remotely reachable through its supported command-line options. Any process running as any local user may still observe video or request control.
+
+The proof controller firmware also accepts controller-state writes from an unpaired BLE central. A nearby BLE device can therefore inject input outside the daemon's lease and neutralization rules. Use this release only where you trust both local processes and nearby Bluetooth devices. Pairing, bonding, and authenticated GATT access are deferred firmware work. Remote access, an untrusted multi-user host, or an untrusted radio environment requires a new security design.
 
 ## Release archives
 

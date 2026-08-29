@@ -99,6 +99,8 @@ The controller output adapter hides BLE discovery, connection, GATT lookup, stat
 
 The daemon binds gRPC and MJPEG only to numeric loopback TCP addresses. Clients receive the daemon URI as a command-line option. The current single-user release deliberately does not authenticate local clients: any process on the host can observe video or request control. Remote access and untrusted multi-user hosts are outside this trust boundary and require a new ADR. The transport seam can later gain a local Windows transport without changing domain interfaces.
 
+The proof firmware's BLE state characteristic is writable without pairing or bonding. Daemon lease generations protect only cooperating ConsoleControl clients; they do not prevent a nearby BLE central from writing directly to the bridge. The initial release treats nearby Bluetooth devices as trusted. A later firmware checkpoint may add authenticated pairing and a recovery flow.
+
 ## Future firmware architecture
 
 The remaining controller-personality, bridge-protocol, firmware-layout, and OTA sections define later checkpoints. They are not implemented by the current fixed-personality proof firmware or desktop release.

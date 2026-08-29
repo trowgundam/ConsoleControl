@@ -28,7 +28,7 @@ bin/consolecontrol-gui --daemon http://127.0.0.1:5041
 
 Choose the controller bridge and video source in the GUI. The GUI takes control automatically when no other client owns it. Choose **Take Control** only when another client owns the controller lease. Use **Configure input mapping...** to map a keyboard or gamepad.
 
-The daemon also serves MJPEG video on `http://127.0.0.1:5042/video/live.mjpeg`. Both listeners are restricted to `127.0.0.1` and have no authentication. Any process on the local machine can observe video or request controller control.
+The daemon also serves MJPEG video on `http://127.0.0.1:5042/video/live.mjpeg`. Both listeners are restricted to `127.0.0.1` and have no authentication. Any process on the local machine can observe video or request controller control. The proof firmware also accepts state writes from an unpaired BLE central, so a nearby Bluetooth device can bypass daemon control arbitration. Use this release only where local processes and nearby Bluetooth devices are trusted.
 
 ## Connect an agent
 
