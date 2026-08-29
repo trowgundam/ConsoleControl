@@ -7,12 +7,12 @@ ConsoleControl concentrates console lifecycle in one daemon session. Capture, in
 ### Live video
 
 ```text
-NanoKVM UVC -> FFmpeg capture -> latest decoded frame -> capacity-one subscriber -> GUI renderer
-                                      |
-                                      +-> retained latest frame -> screenshot request
+NanoKVM UVC MJPEG -> FFmpeg pass-through -> retained encoded JPEG -> MJPEG subscriber -> GUI decoder
+                                                   |
+                                                   +-> copied JPEG -> screenshot request
 ```
 
-Capture never waits for a client. Each subscriber owns one pending-frame slot. Publishing a new frame replaces a stale pending frame. The retained latest frame uses reference-counted immutable storage so screenshot encoding cannot block capture.
+Capture never waits for a client. Each subscriber observes only the newest complete encoded JPEG. Publishing replaces the retained frame, and screenshot callers receive a copied byte array so they cannot mutate capture-owned data.
 
 ### Interactive input
 
@@ -22,14 +22,14 @@ keyboard or SDL gamepad
         -> canonical controller snapshot plus lease generation
         -> gRPC boundary
         -> session runtime
-        -> active personality encoder
+        -> fixed Switch proof encoder
         -> BLE bridge
         -> console-facing USB report
 ```
 
 The GUI sends complete snapshots instead of button edges. The daemon accepts a snapshot only from the current lease generation. Every lease-loss transition passes through one neutralization operation before another client can write.
 
-### Controller personality activation
+### Future controller personality activation
 
 ```text
 personality package
@@ -41,70 +41,15 @@ personality package
         -> USB attach and enumeration
 ```
 
-Personality uploads are idempotent within one bridge boot. A digest identifies the package, chunks have explicit offsets, and repeated commits produce the same active personality. Power loss clears the package. The daemon uploads it again after reconnecting.
+This flow is a design target, not current behavior. The proof firmware exposes one fixed Switch-compatible USB personality. A future personality upload must be idempotent within one bridge boot: a digest identifies the package, chunks have explicit offsets, and repeated commits produce the same active personality. Power loss clears the package, after which the daemon uploads it again.
 
-## Core types
+## Core and client contracts
 
-The domain model starts with complete input state and explicit lease generations.
+`ConsoleControl.Core` defines complete `ControllerState` snapshots, control priority and ownership, hardware inventory and selection types, input profiles, video status, encoded frames, screenshots, and bounded automation sequences. `ClientId`, `LeaseGeneration`, and `ControlLease` remain daemon-side arbitration details.
 
-```csharp
-public readonly record struct ControllerState(
-    GameButtons Buttons,
-    HatPosition DPad,
-    StickPosition LeftStick,
-    StickPosition RightStick,
-    TriggerPosition LeftTrigger,
-    TriggerPosition RightTrigger)
-{
-    public static ControllerState Neutral { get; }
-}
+`IConsoleSession` exposes status, explicit controller-bridge and video selection, screenshots, interactive control, automation control requests, and request rejection. `IControlSession` sends complete controller states over one duplex stream. `IAutomationSession` reports asynchronous lease completion and runs daemon-owned bounded sequences. The current signatures live in `src/ConsoleControl.Client/IConsoleSession.cs`; generated protobuf types never cross that boundary.
 
-public readonly record struct ClientId(Guid Value);
-public readonly record struct LeaseGeneration(ulong Value);
-
-public sealed record ControlLease(
-    ClientId Owner,
-    LeaseGeneration Generation,
-    ControlPriority Priority,
-    DateTimeOffset ExpiresAt);
-
-public enum ControlPriority
-{
-    Automation,
-    InteractiveUser
-}
-```
-
-An interactive client may preempt an automation client. Automation cannot preempt an interactive client. A second interactive client receives a conflict until the product defines an explicit takeover experience.
-
-The first client interface contains only operations required by the GUI release.
-
-```csharp
-public interface IConsoleSession : IAsyncDisposable
-{
-    Task<DeviceInventory> GetDevicesAsync(CancellationToken cancellationToken);
-
-    Task ConfigureAsync(
-        ConsoleConfiguration configuration,
-        CancellationToken cancellationToken);
-
-    IAsyncEnumerable<VideoFrame> WatchVideoAsync(
-        CancellationToken cancellationToken);
-
-    Task<IControlSession> TakeControlAsync(
-        ControlPriority priority,
-        CancellationToken cancellationToken);
-}
-
-public interface IControlSession : IAsyncDisposable
-{
-    Task SetStateAsync(
-        ControllerState state,
-        CancellationToken cancellationToken);
-}
-```
-
-Screenshot capture and bounded digital-input sequences use separate client operations. The daemon compiles each sequence into an absolute timeline and remains the only controller writer. Generated protobuf types do not cross the client interface.
+An interactive client may preempt an automation client. Automation cannot preempt an interactive client. A second interactive client receives a conflict until the product defines an explicit takeover experience. The daemon compiles automation sequences into an absolute timeline and remains the only controller writer.
 
 ## Daemon ownership
 
@@ -115,8 +60,7 @@ At startup, the daemon takes an exclusive per-user file lock before it initializ
 Together these daemon runtimes currently own:
 
 - capture and controller-bridge lifetimes;
-- persisted hardware selection and controller mappings;
-- controller-personality activation;
+- persisted hardware selection;
 - lease acquisition, renewal, revocation, and expiry;
 - neutralization after every loss of control;
 - latest-frame publication;
@@ -125,22 +69,21 @@ Together these daemon runtimes currently own:
 The gRPC service parses and validates transport messages, then calls the runtime. It contains no session rules. Hardware adapters implement narrow ports and contain no lease or product policy.
 
 ```csharp
-internal interface IVideoCapture : IAsyncDisposable
+internal interface IVideoCaptureAdapter
 {
-    IAsyncEnumerable<DecodedFrame> CaptureAsync(
-        VideoSourceId source,
+    Task<ImmutableArray<VideoSource>> GetSourcesAsync(
+        CancellationToken cancellationToken);
+
+    Task<IVideoCaptureSession> OpenAsync(
+        VideoSource source,
         CancellationToken cancellationToken);
 }
 
 internal interface IControllerOutput : IAsyncDisposable
 {
-    Task<BridgeCapabilities> ConnectAsync(
-        ControllerBridgeId bridge,
-        CancellationToken cancellationToken);
+    bool IsConnected { get; }
 
-    Task ApplyPersonalityAsync(
-        ControllerPersonality personality,
-        CancellationToken cancellationToken);
+    Task ConnectAsync(CancellationToken cancellationToken);
 
     ValueTask WriteStateAsync(
         ControllerState state,
@@ -150,13 +93,17 @@ internal interface IControllerOutput : IAsyncDisposable
 
 The BlueZ bridge adapter performs a bounded active scan on the configured adapter and includes only devices advertising the firmware service UUID. A selected bridge is persisted even while unavailable; the daemon never silently substitutes another device. The adapter resolves the state characteristic by UUID after connection, because BlueZ object paths are not stable. Selection is rejected while any control lease is active.
 
-The controller output adapter hides BLE discovery, connection, GATT lookup, state writes, and report encoding. The video adapter hides UVC enumeration, FFmpeg invocation, decoding, and frame-buffer ownership.
+The controller output adapter hides BLE discovery, connection, GATT lookup, state writes, and report encoding. The video adapter hides UVC enumeration, FFmpeg invocation, MJPEG pass-through, and encoded-frame ownership.
 
 ## Local process boundary
 
-The daemon binds gRPC and MJPEG only to explicit loopback TCP addresses. Clients receive the daemon URI as a command-line option. The daemon does not yet publish an endpoint file, authenticate clients, or manage its own process lifecycle. This explicit transport boundary can later gain a local Windows transport without changing domain interfaces.
+The daemon binds gRPC and MJPEG only to numeric loopback TCP addresses. Clients receive the daemon URI as a command-line option. The current single-user release deliberately does not authenticate local clients: any process on the host can observe video or request control. Remote access and untrusted multi-user hosts are outside this trust boundary and require a new ADR. The transport seam can later gain a local Windows transport without changing domain interfaces.
 
-## Controller personality format
+## Future firmware architecture
+
+The remaining controller-personality, bridge-protocol, firmware-layout, and OTA sections define later checkpoints. They are not implemented by the current fixed-personality proof firmware or desktop release.
+
+### Controller personality format
 
 A personality package is versioned data with strict size and capability limits. Validation constructs trusted descriptor and layout types from package bytes. Internal code does not pass unrelated byte arrays as a personality.
 
@@ -182,7 +129,7 @@ public abstract record OutputBehavior
 
 The firmware rejects unsupported descriptor classes, excessive lengths, invalid endpoints, excessive packet sizes, unsafe polling intervals, inconsistent report layouts, and unknown compiled handlers. The first Hori personality uses `Ignore` unless hardware testing proves that a fixed reply is necessary.
 
-## Bridge protocol
+### Bridge protocol
 
 The BLE protocol is versioned independently from the personality format. Its operations are:
 
@@ -202,9 +149,9 @@ ActivateFirmware
 
 Personality transfers use RAM and can resume only during the same boot. Firmware transfers use inactive flash and may resume across reconnects when update metadata proves that existing chunks belong to the same signed package. Repeated chunks must match existing bytes. Repeated commit operations are safe.
 
-Controller-state messages carry monotonically increasing sequence numbers. Firmware ignores old sequence numbers. The USB task reads the latest accepted state without waiting for BLE and emits neutral state after a bounded communication timeout.
+The target bridge protocol gives controller-state messages monotonically increasing sequence numbers and makes firmware ignore old sequence numbers. The current eight-byte proof protocol does neither; adding both is deferred until the next firmware checkpoint. The current USB task still reads the latest received state without waiting for BLE and emits neutral state after a bounded communication timeout.
 
-## Firmware structure
+### Firmware structure
 
 The firmware uses C++ with Adafruit's nRF52 Arduino core, TinyUSB, and Bluefruit if the hardware proof succeeds. One coordinator owns USB personality, controller state, and update-mode transitions. BLE and USB processing submit events to that coordinator instead of mutating shared state.
 
@@ -212,7 +159,7 @@ The firmware keeps validated personality bytes in bounded RAM. TinyUSB handlers 
 
 Board-specific linker layouts live under `firmware/ConsoleControl.ControllerBridge/boards/`. No generic memory map may be used for a physical flash until `ConsoleControl.DeviceProbe` records that board's bootloader and boundaries.
 
-## Update invariants
+### Update invariants
 
 The exact update mechanism remains conditional on the hardware proof, but every acceptable implementation preserves these rules:
 
@@ -230,7 +177,9 @@ The proof must determine whether the factory boot chain can support these rules.
 
 ## Configuration ownership
 
-The daemon stores capture selection, controller-bridge selection, the active personality, and input mappings as versioned JSON in the platform's per-user configuration directory. The GUI stores window, layout, and display preferences separately. Neither component uses a database.
+The daemon stores capture selection and controller-bridge selection as schema-versioned JSON in the platform's per-user configuration directory. It rejects unknown selection schemas. The current fixed-personality release stores no active personality.
+
+The GUI stores input mappings, the last selected input source, and window size and maximized state in one schema-versioned JSON document. An SDL profile key contains the device GUID, so identical controllers share a mapping. If the saved controller is absent, the GUI uses Keyboard without replacing the saved preference. The GUI restores the controller when that GUID becomes available again. Writes take a cross-process lock, reload the current document, merge one preference, and replace the file atomically. On first use, the GUI imports the former `input-profiles.json` and `gui-preferences.json` files without deleting them.
 
 ## Project boundaries
 
@@ -241,32 +190,27 @@ src/
   ConsoleControl.Client/               client API, discovery, launch, gRPC adapter
   ConsoleControl.Daemon/               process host and ConsoleRuntime
   ConsoleControl.Video.FFmpeg/          capture and frame ownership
-  ConsoleControl.Controller.Bluetooth/ BLE bridge and personality transport
+  ConsoleControl.Controller.Bluetooth/ BLE bridge discovery and state transport
   ConsoleControl.Input.Sdl/             SDL input and canonical mappings
   ConsoleControl.Gui/                   Avalonia UI and presentation settings
 tests/
-  ConsoleControl.Core.Tests/
-  ConsoleControl.Protocol.Tests/
   ConsoleControl.IntegrationTests/
 firmware/ConsoleControl.ControllerBridge/
-  src/
-  bootloader/
   boards/
-  tests/
-controller-personalities/switch-hori-usb/
+  ConsoleControl.ControllerBridge.ino
+controller-personalities/
 tools/
   ConsoleControl.DeviceProbe/
-  ConsoleControl.FirmwarePack/
 ```
 
-`ConsoleControl.IntegrationTests` runs a real daemon and client against fake capture and bridge adapters. It proves lease expiry, neutralization, stale-generation rejection, endpoint authentication, and frame backpressure without hardware. Hardware acceptance tests cover the boundaries that fakes cannot prove.
+`ConsoleControl.IntegrationTests` runs a real daemon and client against fake capture and bridge adapters. It proves lease expiry, neutralization, stale-generation rejection, loopback-only listener validation, and frame backpressure without hardware. Hardware acceptance tests cover the boundaries that fakes cannot prove.
 
-## Implementation gates
+## Checkpoint history and future gates
 
-1. Record the purchased board's UF2 metadata and flash layout. Prove recovery after an invalid application. Prove concurrent BLE and static Hori USB operation. Prove neutralization after BLE loss.
-2. Upload a Hori personality into RAM, activate it, and control Switch 2. Prove that personality and state traffic cause no flash writes.
-3. Implement the daemon and client through fake adapters. Prove control arbitration and bounded video queues end to end.
-4. Add the FFmpeg adapter and measure capture-to-display latency before choosing child-process or native bindings.
-5. Add the Avalonia GUI and SDL input. Prove the real NanoKVM-to-Switch path.
-6. Implement and fault-test signed OTA after the boot layout is known.
-7. Add MCP screenshots, hardware inventory and selection, control arbitration, and bounded sequences after the GUI release is stable.
+Completed checkpoints recorded elsewhere in the repository cover the board metadata and recovery proof, fixed Switch USB personality, daemon and client, FFmpeg capture, Avalonia and SDL input, and digital MCP automation.
+
+Future firmware gates are:
+
+1. Upload a controller personality into RAM, activate it, and prove that personality and state traffic cause no flash writes.
+2. Implement and fault-test signed OTA after the boot layout is known.
+3. Version the controller-state packet, add a monotonic sequence number, reject stale packets in firmware, and prove the behavior on hardware.

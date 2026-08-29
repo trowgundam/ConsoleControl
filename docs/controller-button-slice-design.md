@@ -1,5 +1,7 @@
 # Controller button slice design
 
+> Historical proof document. It records the first one-button implementation and is not current operating guidance. Use the root `README.md` for supported commands and `docs/architecture.md` for the current duplex control stream.
+
 ## Problem
 
 The first desktop slice must prove the real path from an Avalonia button through a daemon to the Bluetooth controller bridge. It must preserve complete controller snapshots, daemon-owned hardware, and generation-checked control without adding video, daemon discovery, MCP, mappings, or the finished lease-expiry policy.
@@ -50,7 +52,7 @@ A `PulseButton` RPC lost because it is a partial-state and timing API that canno
 
 - Does BlueZ preserve the proof firmware's GATT object paths across reconnection on this host?
 - Does an 80 ms click feel reliable across the complete GUI and gRPC path?
-- What daemon discovery and authentication experience should ship with the first complete GUI release?
+- Daemon discovery remains an installation concern. ADR 0006 settles the first release's unauthenticated loopback trust boundary.
 
 ## Next implementation step
 

@@ -1,6 +1,6 @@
 # nRF52840 hardware proof
 
-This procedure applies only to the observed `nice!nano` board with UF2 bootloader 0.6.0 and S140 6.1.1. The recorded application region starts at `0x00026000` and ends before the factory bootloader at `0x000F4000`.
+This procedure applies only to the tested Teyleten Robot Pro Micro nRF52840 clone sold under Amazon ASIN `B0CYLNZ6V4`. That board reports UF2 model `nice!nano` and board ID `nRF52840-nicenano`, with UF2 bootloader 0.6.0 and S140 6.1.1. The recorded application region starts at `0x00026000` and ends before the factory bootloader at `0x000F4000`; do not assume that map applies to a genuine nice!nano or another clone.
 
 The current candidate image presents a Nintendo Switch Pro Controller and accepts complete eight-byte controller states over Bluetooth LE. It implements the wired USB handshake and begins streaming `0x30` input reports after the host selects that mode. If Bluetooth disconnects or no valid state arrives for 250 ms, it sends neutral state.
 
@@ -12,7 +12,7 @@ Switch 2 did not accept that Hori identity. The dock path and wired-controller s
 
 The Switch 2 proof passed on 2026-08-28. The console completed USB setup, selected report mode `0x30`, finalized wired pairing with request type `0x04`, read the calibration ranges, enabled the IMU, and assigned player lights. An A snapshot opened Change Grip/Order, and a simultaneous L + R snapshot registered the controller. The firmware returned to neutral after each snapshot timed out.
 
-It does not implement firmware updates or arbitrary personalities. Those belong after this proof passes.
+It does not implement firmware updates, arbitrary personalities, controller-state sequence numbers, or stale-state rejection. Those remain future firmware checkpoints. The sequence change must version the current eight-byte BLE packet and pass a hardware test that sends reordered states before it becomes an architecture invariant.
 
 ## Build and validate
 
@@ -45,7 +45,7 @@ ConsoleControl releases do not distribute this UF2. Each user generates it local
 With the board in double-reset bootloader mode, inspect it before copying:
 
 ```bash
-tools/hardware-proof.sh inspect /run/media/jeff/NICENANO
+tools/hardware-proof.sh inspect /path/to/NICENANO
 ```
 
 The output must name the expected model, board ID, bootloader, and SoftDevice. Stop if any value differs from `firmware/ConsoleControl.ControllerBridge/boards/nicenano-v1-s140-6.1.1/observed.toml`.
@@ -55,7 +55,7 @@ The output must name the expected model, board ID, bootloader, and SoftDevice. S
 1. Disconnect the board from the Switch or any other USB host.
 2. Connect it to the laptop with a data-capable USB cable.
 3. Double-tap reset. Confirm that `NICENANO` mounts.
-4. Confirm that the mount is writable with `findmnt -no OPTIONS /run/media/jeff/NICENANO`. Do not copy while it contains `ro`.
+4. Find the mounted `NICENANO` volume in your file manager or with `findmnt --label NICENANO`. Confirm that mount is writable with `findmnt -no OPTIONS /path/to/NICENANO`. Do not copy while it contains `ro`.
 5. Copy `artifacts/hardware-proof/controller-bridge-proof.uf2` to the root of `NICENANO`.
 6. Wait for the board to accept the image and leave the UF2 volume. Do not unplug it during the copy.
 
