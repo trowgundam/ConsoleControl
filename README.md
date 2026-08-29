@@ -146,7 +146,7 @@ The daemon accepts unauthenticated gRPC and MJPEG connections from the local mac
 
 ## Release archives
 
-The first published release will be a self-contained .NET archive for x86-64 Linux. Users will not need the repository or .NET SDK. The current native dependencies require glibc 2.38 or newer, so the archive targets distributions such as Ubuntu 24.04 or newer. It is not compatible with Ubuntu 22.04, Debian 12, or RHEL 9.
+The first published release will be a self-contained .NET archive for x86-64 Linux. After the controller bridge has been flashed, desktop users will not need the repository or .NET SDK. Building and initially flashing the controller firmware still requires the source archive and the tools listed in [the hardware procedure](docs/hardware-proof.md). The current native dependencies require glibc 2.38 or newer, so the desktop archive targets distributions such as Ubuntu 24.04 or newer. It is not compatible with Ubuntu 22.04, Debian 12, or RHEL 9.
 
 The archive does not bundle FFmpeg, Video4Linux utilities, BlueZ, or Linux graphics and font libraries. Install `ffmpeg`, `v4l-utils`, BlueZ, D-Bus, Fontconfig, FreeType, Expat, zlib, bzip2, libpng, Brotli, and the X11 or Wayland client libraries supplied by your distribution.
 

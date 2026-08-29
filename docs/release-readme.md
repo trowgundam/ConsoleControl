@@ -1,6 +1,6 @@
 # ConsoleControl portable Linux release
 
-This archive contains self-contained .NET builds of the ConsoleControl daemon, GUI, and MCP server for x86-64 Linux. It does not include controller-bridge firmware.
+This archive contains self-contained .NET builds of the ConsoleControl daemon, GUI, and MCP server for x86-64 Linux. It does not include controller-bridge firmware. The self-contained claim applies only after a controller bridge has been flashed; building and initially flashing that firmware requires the separate source archive and its documented toolchain.
 
 ## Requirements
 
