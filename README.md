@@ -208,6 +208,10 @@ Signed over-the-air updates, interrupted-update rollback, USB maintenance update
 
 See [the third-party notices](THIRD-PARTY-NOTICES.md) and [the dependency license audit](docs/research/dependency-license-audit.md) for shipped dependency licenses and release obligations.
 
+## AI-assisted development
+
+OpenAI Codex contributed code, tests, documentation, and review work to ConsoleControl. The maintainer directed the work, accepted the changes, and performed the recorded hardware tests. Review and verify the software for your own setup, especially before using it with different hardware.
+
 ## License
 
 ConsoleControl is licensed under the GNU General Public License, version 3 or any later version. See [LICENSE](LICENSE).

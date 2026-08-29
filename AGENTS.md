@@ -41,6 +41,14 @@ Place every .NET project in its own root-level project directory under `src/`, `
 
 Use GPL-3.0-or-later-compatible dependencies. The only accepted exception is the firmware sketch's documented GPLv3 section 7 permission for the ARM CryptoCell CC310 archive required by the Adafruit nRF52 core. Do not distribute firmware binaries until a new license audit also resolves LGPL relinking. OpenPuck is an AGPL research reference. Implement protocol behavior independently unless the user explicitly accepts AGPL for the affected artifact. Record protocol provenance and dependency licenses.
 
+## Mark agent-created commits
+
+Every commit created by an agent must include this trailer:
+
+```text
+Co-authored-by: Codex <noreply@openai.com>
+```
+
 ## Prove each boundary
 
 Run the narrowest repeatable checks first, then exercise the real path affected by the change. A build is necessary but does not prove hardware or user behavior.
