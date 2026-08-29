@@ -14,6 +14,14 @@ if (options.ShowHelp)
     Console.WriteLine(DaemonOptions.Usage);
     return;
 }
+using DaemonSessionLock? sessionLock = DaemonSessionLock.TryAcquire();
+if (sessionLock is null)
+{
+    Console.Error.WriteLine(
+        "Another ConsoleControl daemon already owns this user's console session.");
+    Environment.ExitCode = 1;
+    return;
+}
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 builder.Logging.AddFilter("Grpc.AspNetCore.Server.ServerCallHandler", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);

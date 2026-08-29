@@ -110,7 +110,9 @@ Screenshot capture and bounded digital-input sequences use separate client opera
 
 `ConsoleRuntime` owns control arbitration and controller writes. `ControllerBridgeRuntime` owns compatible-bridge inventory, persisted explicit selection, revision checks, and the active BlueZ adapter binding. `VideoRuntime` owns video inventory, selection, capture, and latest-frame publication.
 
-Together these daemon runtimes own:
+At startup, the daemon takes an exclusive per-user file lock before it initializes either hardware runtime. A second daemon exits with an error even when configured with different loopback ports. Releasing the process lock does not delete its file, which avoids a replacement race between competing starters.
+
+Together these daemon runtimes currently own:
 
 - capture and controller-bridge lifetimes;
 - persisted hardware selection and controller mappings;
