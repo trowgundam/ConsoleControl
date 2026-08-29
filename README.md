@@ -4,7 +4,9 @@ ConsoleControl lets a person or an AI agent operate a game console through captu
 
 The current hardware target is a docked Nintendo Switch 2. A NanoKVM-USB captures HDMI video, while a small nRF52840 board presents a Switch-compatible USB controller. The NanoKVM's stock control connection cannot emulate the required controller, so ConsoleControl uses it only for video capture.
 
-The controller, GUI, live-video, and digital MCP paths have all passed on the target hardware. This is still a development build. Portable desktop release archives and unattended firmware updates are not available yet.
+The controller, GUI, live-video, and digital MCP paths have all passed on the target hardware. Version tags publish a portable Linux desktop archive. Unattended firmware updates are not available.
+
+The latest watched desktop checks are recorded in [desktop hardware acceptance](docs/desktop-hardware-acceptance.md).
 
 ## What works
 
@@ -102,7 +104,7 @@ dotnet run --project src/ConsoleControl.Gui -- \
   --daemon http://127.0.0.1:5041
 ```
 
-Choose a controller bridge and video source. Then choose **Take Control** before sending input. The GUI starts as an observer so an automation client can retain control while a user watches.
+Choose a controller bridge and video source. When no other client has control, the GUI takes control at startup. If another client owns the lease, the GUI remains an observer until you choose **Take Control**.
 
 Choose a keyboard or gamepad from the input-source list. Only the selected source sends input. Keyboard input is active only while the GUI has focus. Switching sources, losing focus, or disconnecting the selected gamepad clears the current controller state.
 
@@ -117,7 +119,9 @@ dotnet run --project src/ConsoleControl.Mcp -- \
   --daemon http://127.0.0.1:5041
 ```
 
-This repository contains a project-scoped Codex configuration in [`.codex/config.toml`](.codex/config.toml). It uses an absolute development path and is not suitable for redistribution as written.
+This source checkout includes `.codex/config.toml`, so Codex registers the MCP server when it opens the repository. Restart Codex after building the project or changing the MCP contract.
+
+For an extracted release archive, copy [`examples/codex-config.toml`](examples/codex-config.toml) into the project where you want to use ConsoleControl. Replace its executable path with the absolute path to the archive's `bin/consolecontrol-mcp` launcher.
 
 An agent starts by reading status, selecting unavailable hardware when necessary, and requesting control with a reason. If the GUI holds control, the user sees that reason and decides whether to release it. The GUI can take control back at any time, which stops the running sequence and neutralizes the controller.
 
@@ -126,20 +130,30 @@ The MCP server supports:
 - Cached daemon and hardware status
 - Controller-bridge and video-source inventory and selection
 - Control requests and release
-- Retained screenshots at low, medium, and original fidelity
+- Retained screenshots at low, medium, and high fidelity
 - Atomic digital presses and bounded holds
 - Timed sequences with overlapping holds, pauses, and screenshots
 
 Sequences are limited to 256 commands, 30 seconds, eight screenshots, and 32 MiB of original screenshot data. Analog automation is not implemented.
 
-Agents can use [the ConsoleControl operation skill](.agents/skills/operate-console-control/SKILL.md) and [the Switch navigation skill](.agents/skills/navigate-nintendo-switch/SKILL.md). The operation skill asks whether the user wants a watched GUI session or a headless session before it starts the local processes.
+Sequence captures return retained screenshot IDs and timing metadata without embedding images in the sequence response. Use `console_render_screenshot` to inspect any retained frame at low, medium, or high fidelity. High fidelity returns the exact original JPEG.
 
-## Planned release archives
+Agents can use [the ConsoleControl operation skill](.agents/skills/operate-console-control/SKILL.md) and [the Switch navigation skill](.agents/skills/navigate-nintendo-switch/SKILL.md). In a source checkout, Codex discovers them from `.agents/skills/`. An archive user can copy both directories from `skills/` into a project's `.agents/skills/` directory. The operation skill asks whether the user wants a watched GUI session or a headless session before it starts the local processes.
 
-The first published release will be a portable, self-contained Linux archive. Users will not need the repository or .NET SDK. The archive will contain:
+## Local trust boundary
+
+The daemon accepts unauthenticated gRPC and MJPEG connections from the local machine. It rejects non-loopback listener addresses, so it is not remotely reachable through its supported command-line options. Any process running as any local user may still observe video or request control. Run ConsoleControl only on a machine whose local processes you trust. Remote access or a multi-user deployment requires a new authenticated transport design.
+
+## Release archives
+
+The first published release will be a self-contained .NET archive for x86-64 Linux. Users will not need the repository or .NET SDK. The current native dependencies require glibc 2.38 or newer, so the archive targets distributions such as Ubuntu 24.04 or newer. It is not compatible with Ubuntu 22.04, Debian 12, or RHEL 9.
+
+The archive does not bundle FFmpeg, Video4Linux utilities, BlueZ, or Linux graphics and font libraries. Install `ffmpeg`, `v4l-utils`, BlueZ, D-Bus, Fontconfig, FreeType, Expat, zlib, bzip2, libpng, Brotli, and the X11 or Wayland client libraries supplied by your distribution.
+
+The archive will contain:
 
 ```text
-ConsoleControl-linux-x64/
+ConsoleControl-VERSION-linux-x64/
 ├── bin/
 │   ├── consolecontrol-daemon
 │   ├── consolecontrol-gui
@@ -150,10 +164,12 @@ ConsoleControl-linux-x64/
 │       ├── gui/
 │       └── mcp/
 ├── controller-personalities/
+├── docs/
 ├── skills/
 ├── examples/
 │   └── codex-config.toml
 ├── third-party-licenses/
+├── README.md
 ├── LICENSE
 └── THIRD-PARTY-NOTICES.md
 ```
@@ -170,7 +186,7 @@ The first archive will target `linux-x64`. Windows needs platform-specific captu
 src/                       .NET applications and libraries
 tests/                     domain, protocol, and integration tests
 firmware/                  nRF52840 controller-bridge firmware
-controller-personalities/  runtime USB controller definitions
+controller-personalities/  future USB personality assets and design notes
 docs/                      architecture, decisions, and hardware notes
 tools/                     verification and hardware utilities
 .agents/skills/            agent operation and navigation guidance
@@ -180,9 +196,9 @@ Every .NET project has its own directory. Hardware-specific behavior stays behin
 
 ## Firmware updates and recovery
 
-The installed UF2 bootloader remains the recovery path. A double reset exposes the UF2 volume even when an application image fails. Ordinary controller input and personality changes stay in RAM and do not write flash.
+The installed UF2 bootloader remains the recovery path. A double reset exposes the UF2 volume even when an application image fails. Ordinary controller input stays in RAM and does not write flash. Future personality activation must preserve that no-flash-write invariant.
 
-Signed over-the-air updates, interrupted-update rollback, and USB maintenance updates remain planned work. ConsoleControl will not describe OTA as safe until power-loss and invalid-image recovery pass on the purchased boards.
+Signed over-the-air updates, interrupted-update rollback, USB maintenance updates, versioned controller-state sequence numbers, and stale-state rejection remain planned work. ConsoleControl will not describe OTA as safe until power-loss and invalid-image recovery pass on the purchased boards. It will not claim ordered BLE state delivery until reordered-state rejection passes on hardware.
 
 ## Protocol and dependency provenance
 

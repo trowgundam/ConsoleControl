@@ -5,7 +5,7 @@ description: Navigate Nintendo Switch and Switch 2 system menus with ConsoleCont
 
 # Navigate Nintendo Switch
 
-Use this skill with `operate-console-control`. Read [the researched menu reference](../../../docs/research/switch-menu-navigation.md) when the task involves library, settings, controller, or recovery details.
+Use this skill with `operate-console-control`. When the task involves library, settings, controller, or recovery details, read `references/switch-menu-navigation.md` if the packaged reference exists. In a source checkout, read [the repository copy](../../../docs/research/switch-menu-navigation.md).
 
 ## Use the common controls
 
