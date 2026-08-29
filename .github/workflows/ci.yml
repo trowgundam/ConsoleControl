@@ -126,4 +126,6 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then
             release_args+=(--prerelease)
           fi
-          gh release create "$GITHUB_REF_NAME" dist/* "${release_args[@]}"
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            "${release_args[@]}"
