@@ -28,7 +28,7 @@ The watched GUI session passed these checks against real hardware:
 - A focused dropdown did not consume mapped arrow keys or change the selected input source.
 - The mapping dialog captured keyboard arrow keys without requiring a click on empty space.
 - Steam Controller forwarding still worked after the input-mailbox and routed-key changes.
-- With a mapped input held, switching Steam Controller → Keyboard and Keyboard → the same Steam Controller did not replay a stale pressed state. Fresh input from both sources continued to work after each switch. This verifies the SDL selection-generation guard in the publication candidate based on commit `dafc82b`.
+- With a mapped input held, switching Steam Controller → Keyboard and Keyboard → the same Steam Controller did not replay a stale pressed state. Each prior input released during the switch, and fresh input from both sources continued to work afterward. This watched test verifies the SDL selection-generation guard in publication candidate commit `69f4776`.
 - The GUI imported the existing keyboard and Steam Controller mappings into its local configuration file. It restored the saved Steam Controller after restart and acquired an unowned control lease at startup.
 - Window size and maximized state persisted across GUI restarts.
 - Closing the GUI released its lease. The MCP status endpoint then reported `control_owner` as `none` and `this_mcp_has_control` as `false`.
