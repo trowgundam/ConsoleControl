@@ -112,6 +112,8 @@ The compile may pull more source files from the board core than the direct inclu
 
 The generated firmware statically links the LGPL-covered Adafruit core and ARM's precompiled CryptoCell archive. The ARM archive license restricts its use and reverse engineering. ConsoleControl therefore publishes the firmware source and local build instructions but no compiled UF2. This avoids distributing the combined binary and keeps firmware dependencies out of the desktop archive.
 
+The firmware sketch grants an additional permission under GPLv3 section 7 for linking or combining it with CryptoCell CC310 archive version 0.9.13 under the ARM Object Code and Header Files License 1.0. This resolves the GPL-side permission for that intended combination without changing the ARM terms. ConsoleControl still does not distribute the combined UF2 because the LGPL relinking obligation and the complete firmware-binary notice set have not been resolved.
+
 Revisit the complete firmware license inventory before any future binary distribution. A future release would need to address LGPL relinking and the GPL compatibility of the ARM archive instead of treating a source archive as sufficient.
 
 ## Tools and host dependencies that are not shipped

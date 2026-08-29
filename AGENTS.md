@@ -39,7 +39,7 @@ Analog automation, motion, rumble, audio, recording, remote access, multiple con
 
 Place every .NET project in its own root-level project directory under `src/`, `tests/`, or `tools/` as shown in `docs/architecture.md`. Keep C++ firmware under `firmware/`, runtime personality assets under `controller-personalities/`, and supplemental material under `docs/`.
 
-Use GPL-3.0-or-later-compatible dependencies. OpenPuck is an AGPL research reference. Implement protocol behavior independently unless the user explicitly accepts AGPL for the affected artifact. Record protocol provenance and dependency licenses.
+Use GPL-3.0-or-later-compatible dependencies. The only accepted exception is the firmware sketch's documented GPLv3 section 7 permission for the ARM CryptoCell CC310 archive required by the Adafruit nRF52 core. Do not distribute firmware binaries until a new license audit also resolves LGPL relinking. OpenPuck is an AGPL research reference. Implement protocol behavior independently unless the user explicitly accepts AGPL for the affected artifact. Record protocol provenance and dependency licenses.
 
 ## Prove each boundary
 

@@ -1,3 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Additional permission under GNU GPL version 3 section 7:
+// If you modify this Program, or any covered work, by linking or combining it
+// with the ARM CryptoCell CC310 archive version 0.9.13 covered by the ARM Object
+// Code and Header Files License version 1.0, the licensors of this Program grant
+// you additional permission to convey the resulting work. This permission does
+// not alter the license terms of the CryptoCell components.
+
 #include <Adafruit_TinyUSB.h>
 #include <bluefruit.h>
 
