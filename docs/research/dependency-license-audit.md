@@ -8,7 +8,7 @@ The desktop dependencies use MIT, Apache-2.0, BSD-3-Clause, or zlib licenses. Th
 
 `NanoKVM-USB` and OpenPuck do not belong in the release notices. ConsoleControl contains no source, binary, asset, package, submodule, or generated file from either project. The repository cites both as research references. The firmware comment says that its USB descriptor came from a genuine controller capture, not OpenPuck. A later change that copies either project's code or assets must revisit this conclusion.
 
-The desktop release needs a `THIRD-PARTY-NOTICES.md` that reproduces the required copyright and license notices. It must also include the two upstream notice files supplied by the exact .NET runtime packs. The desktop archive excludes firmware binaries and firmware-only dependency licenses.
+The desktop release includes `THIRD-PARTY-NOTICES.md`, the applicable license texts, and the two upstream notice files supplied by the exact .NET runtime packs. The desktop archive excludes firmware binaries and firmware-only dependency licenses.
 
 ## Audit method
 
@@ -18,7 +18,7 @@ The runtime list comes from the `libraries` sections of these generated publish 
 - `src/ConsoleControl.Gui/bin/Release/net10.0/linux-x64/ConsoleControl.Gui.deps.json`
 - `src/ConsoleControl.Mcp/bin/Release/net10.0/linux-x64/ConsoleControl.Mcp.deps.json`
 
-The package licenses come from each resolved package's `.nuspec` and packaged license file under `/home/jeff/.nuget/packages/`. The firmware inventory comes from the installed `adafruit:nrf52` 1.7.0 core under `/home/jeff/.arduino15/packages/adafruit/hardware/nrf52/1.7.0/` and the sketch's includes.
+The package licenses come from each resolved package's `.nuspec` and packaged license file under the build host's NuGet global-packages directory. The firmware inventory comes from the installed `adafruit:nrf52` 1.7.0 core under the build host's Arduino data directory and the sketch's includes.
 
 The `.deps.json` manifests are a better release inventory than `project.assets.json`. The asset files also contain build-time packages and native assets for platforms that the Linux publish does not ship.
 
@@ -88,7 +88,9 @@ The MCP ships these Microsoft.Extensions 10.0.10 packages:
 - The zlib notice in both SDL3-CS packages says not to misrepresent origin, to mark altered source versions, and not to remove the notice from source distributions. Product acknowledgment is appreciated but not required.
 - The .NET runtime packages each contain `THIRD-PARTY-NOTICES.TXT`. Do not replace those detailed files with a one-line .NET entry.
 
-The SkiaSharp and HarfBuzzSharp NuGet packages expose only the Xamarin and Microsoft MIT notice in their extracted package license files. Their native binaries incorporate upstream Skia and HarfBuzz work, but the package does not expose a separate notice file in the local package cache. Treat that as an upstream packaging gap to check against the exact release archive before publishing.
+The assembled `0.1.0-hardening.1` audit archive contained 54 ELF files: 45 .NET runtime files, three ConsoleControl application hosts, two SkiaSharp files, one HarfBuzzSharp file, and three SDL files. The archive included the SkiaSharp and upstream Skia notices, the upstream HarfBuzz notice, the SDL3-CS and upstream SDL notices, and the exact .NET 10.0.11 runtime notices. These agree with the projects' primary license files and release metadata.
+
+`tools/audit-linux-native-assets.sh` now scans the assembled package rather than inferring its contents from NuGet metadata. Every ELF file must match exactly one rule in `tools/linux-x64-native-assets.tsv`, and all notices named by that rule must exist. Packaging fails for an unknown native file, an ambiguous rule, or a missing notice. The generated `NATIVE-ASSET-INVENTORY.tsv` records exact paths and digests for review; digests document the artifact but do not act as a brittle acceptance allowlist.
 
 ## Controller firmware components
 
@@ -114,13 +116,11 @@ Revisit the complete firmware license inventory before any future binary distrib
 
 ## Tools and host dependencies that are not shipped
 
-The release build uses the .NET SDK, Arduino CLI, the Adafruit board package, GNU Arm Embedded binutils, ShellCheck, actionlint, and GitHub Actions. The portable desktop archive does not contain those tools, so their licenses do not belong in the runtime notice file.
+The release build uses the .NET SDK, Arduino CLI, the Adafruit board package, GNU Arm Embedded binutils, ShellCheck, and GitHub Actions. The portable desktop archive does not contain those tools, so their licenses do not belong in the runtime notice file.
 
 The desktop applications invoke or communicate with host software and libraries such as FFmpeg, BlueZ, D-Bus, and Linux graphics or window-system libraries. The packaging script does not copy those system components into the archive. Document them as installation requirements, not bundled dependencies. If a future package bundles FFmpeg or another system library, run a new audit against the exact binary and its enabled codecs.
 
 ## Release follow-up
 
-1. Generate `THIRD-PARTY-NOTICES.md` from the exact resolved packages instead of maintaining a hand-written version list.
-2. Copy both .NET 10.0.11 `THIRD-PARTY-NOTICES.TXT` files into the archive or append them verbatim with clear source labels.
-3. Check the native SkiaSharp, HarfBuzzSharp, and SDL files in the assembled archive against their upstream notices.
-4. Re-run the firmware audit before changing the decision not to distribute compiled firmware.
+1. Generating `THIRD-PARTY-NOTICES.md` from the exact resolved packages would reduce manual version maintenance. The assembled-native-file audit is already enforced.
+2. Re-run the firmware audit before changing the decision not to distribute compiled firmware.

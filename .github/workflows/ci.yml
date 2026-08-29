@@ -78,6 +78,9 @@ jobs:
       - name: Assemble portable archive
         run: tools/package-linux-release.sh "${{ steps.version.outputs.value }}" artifacts/release
 
+      - name: Smoke-test portable archive
+        run: tools/test-linux-release.sh "artifacts/release/ConsoleControl-${{ steps.version.outputs.value }}-linux-x64.tar.gz"
+
       - name: Upload desktop archive
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

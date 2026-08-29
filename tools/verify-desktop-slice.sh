@@ -17,3 +17,4 @@ dotnet run \
   --no-build \
   --no-restore \
   -- mcp-transport
+"$repo_root/tools/test-linux-native-audit.sh"

@@ -1,0 +1,6 @@
+# Extended regular expression	component	required notice files separated by semicolons
+^libexec/consolecontrol/(daemon|gui|mcp)/ConsoleControl\.(Daemon|Gui|Mcp)$	ConsoleControl application host	LICENSE
+^libexec/consolecontrol/(daemon|gui|mcp)/(createdump|lib(clr|coreclr|host|mscord|System\.).*\.so)$	.NET runtime	third-party-licenses/DotNetRuntime-LICENSE.txt
+^libexec/consolecontrol/(gui|mcp)/libSkiaSharp\.so$	SkiaSharp native assets	third-party-licenses/SkiaSharp-LICENSE.txt;third-party-licenses/Skia-LICENSE.txt
+^libexec/consolecontrol/gui/libHarfBuzzSharp\.so$	HarfBuzzSharp native assets	third-party-licenses/HarfBuzz-LICENSE.txt
+^libexec/consolecontrol/gui/libSDL3\.so(\.[0-9.]+)?$	SDL3 native assets	third-party-licenses/SDL3-CS-LICENSE.txt;third-party-licenses/SDL-LICENSE.txt
