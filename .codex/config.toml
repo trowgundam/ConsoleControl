@@ -3,13 +3,11 @@ command = "dotnet"
 args = [
   "run",
   "--project",
-  "/home/jeff/Projects/csharp/ConsoleControl/src/ConsoleControl.Mcp",
-  "--no-build",
+  "src/ConsoleControl.Mcp",
   "--",
   "--daemon",
   "http://127.0.0.1:5041",
 ]
-cwd = "/home/jeff/Projects/csharp/ConsoleControl"
 startup_timeout_sec = 15
 tool_timeout_sec = 45
 default_tools_approval_mode = "writes"
