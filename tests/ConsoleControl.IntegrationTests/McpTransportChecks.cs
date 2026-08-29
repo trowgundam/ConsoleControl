@@ -35,7 +35,9 @@ internal static class McpTransportChecks
         IList<McpClientTool> tools = await client.ListToolsAsync(cancellationToken: timeout.Token);
         Require(tools.Any(tool => tool.Name == "console_get_status"), "console_get_status was not published.");
         Require(tools.Any(tool => tool.Name == "console_get_screenshot"), "console_get_screenshot was not published.");
-        Require(tools.Any(tool => tool.Name == "console_run_sequence"), "console_run_sequence was not published.");
+        McpClientTool sequenceTool = tools.Single(tool => tool.Name == "console_run_sequence");
+        Require(!JsonSerializer.Serialize(sequenceTool).Contains("screenshotFidelity", StringComparison.Ordinal),
+            "console_run_sequence still publishes the removed screenshotFidelity parameter");
 
         CallToolResult status = await client.CallToolAsync(
             "console_get_status",
@@ -50,6 +52,37 @@ internal static class McpTransportChecks
         Require(root.GetProperty("recovery").GetString()?.Length > 0, "error envelope omitted recovery.");
         Require(root.GetProperty("retryable").GetBoolean(), "daemon_unavailable was not marked retryable.");
         Require(root.TryGetProperty("data", out _), "result envelope omitted data.");
+
+        CallToolResult invalidPress = await client.CallToolAsync(
+            "console_press",
+            new Dictionary<string, object?>
+            {
+                ["control"] = "a",
+                ["durationMs"] = 0,
+            },
+            cancellationToken: timeout.Token);
+        Require(invalidPress.IsError == true,
+            "an invalid press duration should be a tool error");
+        TextContentBlock invalidText = invalidPress.Content.OfType<TextContentBlock>().First();
+        using JsonDocument invalidEnvelope = JsonDocument.Parse(invalidText.Text);
+        Require(invalidEnvelope.RootElement.GetProperty("outcome").GetString() == "invalid_request",
+            "an invalid press duration escaped the structured error envelope");
+
+        foreach (string stickClick in new[] { "left_stick_click", "right_stick_click" })
+        {
+            CallToolResult stickClickPress = await client.CallToolAsync(
+                "console_press",
+                new Dictionary<string, object?>
+                {
+                    ["control"] = stickClick,
+                    ["durationMs"] = 80,
+                },
+                cancellationToken: timeout.Token);
+            TextContentBlock stickClickText = stickClickPress.Content.OfType<TextContentBlock>().First();
+            using JsonDocument stickClickEnvelope = JsonDocument.Parse(stickClickText.Text);
+            Require(stickClickEnvelope.RootElement.GetProperty("outcome").GetString() == "control_required",
+                $"the MCP server did not recognize {stickClick}");
+        }
     }
 
     private static string FindRepositoryRoot()

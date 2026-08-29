@@ -16,7 +16,7 @@ An interactive GUI client can revoke an active automation lease. Takeover sends 
 
 The first automation contract accepts only digital buttons and D-pad directions. It limits a sequence to 256 commands, 30 seconds, eight screenshots, and 32 MiB of screenshot data. A failed screenshot stops the sequence, neutralizes the controller, and returns earlier captures plus the failed capture message.
 
-The MCP server retains each original JPEG behind an opaque, process-local screenshot ID. It returns a low, medium, or high rendering without changing the daemon capture contract. A later `console_render_screenshot` call can render the exact retained frame at another fidelity. The cache holds at most 16 originals and 64 MiB for five minutes. Macro captures enter the cache as one batch, so inserting later captures cannot evict earlier captures from the same response.
+The MCP server retains each original JPEG behind an opaque, process-local screenshot ID. A sequence result returns capture metadata and IDs without inline images. The agent uses `console_render_screenshot` to render a selected retained frame at low, medium, or high fidelity. This keeps sequence results bounded by metadata rather than rendered image size without changing the daemon capture contract. The cache holds at most 16 originals and 64 MiB for five minutes. Macro captures enter the cache as one batch, so inserting later captures cannot evict earlier captures from the same response.
 
 ## Consequences
 

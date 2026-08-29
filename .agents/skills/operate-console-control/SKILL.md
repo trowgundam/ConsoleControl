@@ -11,7 +11,7 @@ Use ConsoleControl only on the local machine. The daemon is a separate process; 
 
 Before starting a session, ask whether the user wants to watch through the GUI or run headless. Skip the question when the user already chose a mode. For a watched session, start both the daemon and GUI so the user can observe the video and take control. For a headless session, start only the daemon. The MCP client starts the stdio MCP server in either mode.
 
-Prefer the installed `consolecontrol-daemon` and `consolecontrol-gui` commands. In a source checkout without those commands, use the `dotnet run` fallbacks below.
+Prefer the installed `consolecontrol-daemon` and `consolecontrol-gui` commands when they are on `PATH`.
 
 Start an installed daemon in a persistent terminal:
 
@@ -25,7 +25,16 @@ For a watched session, start the installed GUI in another persistent terminal:
 consolecontrol-gui --daemon http://127.0.0.1:5041
 ```
 
-From the repository root, the daemon fallback is:
+For an extracted archive whose `bin/` directory is not on `PATH`, find the absolute `consolecontrol-mcp` command in the MCP client configuration. Run its sibling launchers by absolute path:
+
+```sh
+/absolute/path/to/ConsoleControl/bin/consolecontrol-daemon --adapter hci0
+/absolute/path/to/ConsoleControl/bin/consolecontrol-gui --daemon http://127.0.0.1:5041
+```
+
+If the MCP configuration is not visible, ask the user for the extracted archive path. Do not search unrelated directories or guess an installation path.
+
+In a source checkout without installed commands, the daemon fallback from the repository root is:
 
 ```sh
 dotnet run --project src/ConsoleControl.Daemon -- --adapter hci0
@@ -37,13 +46,24 @@ The watched-session GUI fallback is:
 dotnet run --project src/ConsoleControl.Gui -- --daemon http://127.0.0.1:5041
 ```
 
-Configure the agent's MCP client to start:
+For an extracted release archive, configure the agent's MCP client with the absolute launcher path:
+
+```toml
+[mcp_servers.console_control]
+command = "/absolute/path/to/ConsoleControl/bin/consolecontrol-mcp"
+args = ["--daemon", "http://127.0.0.1:5041"]
+startup_timeout_sec = 15
+tool_timeout_sec = 45
+default_tools_approval_mode = "writes"
+```
+
+The archive includes the same template at `examples/codex-config.toml`. In a source checkout, use this fallback command in the MCP client configuration:
 
 ```sh
 dotnet run --project src/ConsoleControl.Mcp -- --daemon http://127.0.0.1:5041
 ```
 
-Use `--help` on either application to inspect address options. Do not start a second daemon on the same ports.
+Pass `--help` to the daemon or MCP launcher selected above to inspect its address options. Do not start a second daemon on the same ports.
 
 ## Establish a usable session
 
@@ -69,7 +89,7 @@ Use `console_press` for one atomic digital action. Use `console_hold` for a boun
 
 Keep sequences short enough to observe and interrupt. Digital automation supports at most 256 commands, 30 seconds, eight screenshots, and 32 MiB of original screenshot data. Analog automation is not available.
 
-Prefer a separate `console_get_screenshot` call after a sequence. Include a `screenshot` command in the sequence only when the exact timeline position matters. Bundled screenshots can make the tool response too large for the MCP client or model context.
+Prefer a separate `console_get_screenshot` call after a sequence. Include a `screenshot` command in the sequence only when the exact timeline position matters. Sequence results retain each captured original and return metadata with a `screenshot_id`, but no inline image. Render only the IDs needed for the next decision with `console_render_screenshot`, starting at low fidelity.
 
 ## Recover from errors
 

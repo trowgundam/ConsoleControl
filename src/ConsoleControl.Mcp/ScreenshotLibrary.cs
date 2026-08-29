@@ -40,6 +40,15 @@ internal sealed record RetainedRendering(
     ScreenshotFidelity Fidelity,
     byte[] Jpeg);
 
+internal sealed record RetainedScreenshot(
+    ScreenshotId Id,
+    ulong Generation,
+    ulong Sequence,
+    DateTimeOffset ReceivedAt,
+    DateTimeOffset ExpiresAt,
+    ushort SourceWidth,
+    ushort SourceHeight);
+
 internal enum ScreenshotUnavailableReason
 {
     Expired,
@@ -87,6 +96,17 @@ internal sealed class ScreenshotLibrary(
         IReadOnlyList<Screenshot> sources,
         ScreenshotFidelity fidelity)
     {
+        ImmutableArray<RetainedScreenshot> retained = AddBatch(sources);
+        return retained.Select(item => Render(item.Id, fidelity) switch
+        {
+            ScreenshotRenderResult.Found found => found.Rendering,
+            _ => throw new ScreenshotRenderException(
+                item.Id, $"Screenshot '{item.Id}' was unavailable immediately after retention."),
+        }).ToImmutableArray();
+    }
+
+    public ImmutableArray<RetainedScreenshot> AddBatch(IReadOnlyList<Screenshot> sources)
+    {
         if (sources.Count == 0)
         {
             return [];
@@ -121,13 +141,14 @@ internal sealed class ScreenshotLibrary(
             }
         }
 
-        ImmutableArray<RetainedRendering>.Builder renderings =
-            ImmutableArray.CreateBuilder<RetainedRendering>(added.Length);
-        foreach (Entry entry in added)
-        {
-            renderings.Add(RenderEntry(entry, fidelity));
-        }
-        return renderings.MoveToImmutable();
+        return added.Select(entry => new RetainedScreenshot(
+            entry.Id,
+            entry.Generation,
+            entry.Sequence,
+            entry.ReceivedAt,
+            entry.ExpiresAt,
+            entry.SourceMode.Width,
+            entry.SourceMode.Height)).ToImmutableArray();
     }
 
     public ScreenshotRenderResult Render(ScreenshotId id, ScreenshotFidelity fidelity)

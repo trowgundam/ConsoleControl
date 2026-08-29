@@ -318,7 +318,7 @@ internal sealed class ConsoleTools(
         {
             return Run(new AutomationSequence([
                 new AutomationCommand.Press(ParseControl(control), Milliseconds(durationMs)),
-            ]), ScreenshotFidelity.Low, cancellationToken);
+            ]), cancellationToken);
         }
         catch (ArgumentException exception)
         {
@@ -337,7 +337,7 @@ internal sealed class ConsoleTools(
         {
             return Run(new AutomationSequence([
                 new AutomationCommand.Hold(ParseControl(control), Milliseconds(durationMs)),
-            ]), ScreenshotFidelity.Low, cancellationToken);
+            ]), cancellationToken);
         }
         catch (ArgumentException exception)
         {
@@ -354,8 +354,6 @@ internal sealed class ConsoleTools(
         bool startScreenshot = false,
         [Description("Capture the console after all scheduled releases")]
         bool endScreenshot = false,
-        [Description("Initial fidelity for every returned screenshot: low, medium, or high. Each returned screenshot ID can be rendered again independently.")]
-        string screenshotFidelity = "low",
         CancellationToken cancellationToken = default)
     {
         try
@@ -364,7 +362,6 @@ internal sealed class ConsoleTools(
             ImmutableArray<AutomationCommand> parsed = commands.Select(ParseCommand).ToImmutableArray();
             return Run(
                 new(parsed, startScreenshot, endScreenshot),
-                ParseFidelity(screenshotFidelity),
                 cancellationToken);
         }
         catch (Exception exception) when (exception is ArgumentException or OverflowException)
@@ -375,13 +372,17 @@ internal sealed class ConsoleTools(
 
     private async Task<CallToolResult> Run(
         AutomationSequence sequence,
-        ScreenshotFidelity screenshotFidelity,
         CancellationToken cancellationToken)
     {
         AutomationResult result;
         try
         {
+            sequence.Compile();
             result = await automation.RunAsync(sequence, cancellationToken);
+        }
+        catch (Exception exception) when (exception is ArgumentException or OverflowException)
+        {
+            return ToolError("invalid_request", exception.Message);
         }
         catch (InvalidOperationException exception)
         {
@@ -391,46 +392,39 @@ internal sealed class ConsoleTools(
         {
             return RpcError(exception, "automation_failed", "Check status, request control again if needed, and retry.");
         }
-        ImmutableArray<RetainedRendering> renderings;
+        ImmutableArray<RetainedScreenshot> retained;
         try
         {
-            renderings = screenshots.AddBatchAndRender(
+            retained = screenshots.AddBatch(
                 result.Captures
                     .Where(capture => capture.Screenshot is not null)
                     .Select(capture => capture.Screenshot!)
-                    .ToArray(),
-                screenshotFidelity);
+                    .ToArray());
         }
         catch (ScreenshotRetentionException exception)
         {
             return ToolError("screenshot_retention_failed", exception.Message);
         }
-        catch (ScreenshotRenderException exception)
-        {
-            return ToolError("screenshot_render_failed", exception.Message, exception.Id);
-        }
-
-        int renderingIndex = 0;
+        int retainedIndex = 0;
         List<object> captureMetadata = [];
         foreach (AutomationCapture capture in result.Captures)
         {
-            RetainedRendering? rendering = capture.Screenshot is null
+            RetainedScreenshot? screenshot = capture.Screenshot is null
                 ? null
-                : renderings[renderingIndex++];
+                : retained[retainedIndex++];
             captureMetadata.Add(new
             {
                 name = capture.Name,
                 scheduled_at_ms = Math.Ceiling(capture.ScheduledAt.TotalMilliseconds),
                 actual_at_ms = Math.Ceiling(capture.ActualAt.TotalMilliseconds),
                 failure = capture.Failure,
-                sequence = capture.Screenshot?.Sequence,
-                screenshot_id = rendering?.Id.Value,
-                fidelity = rendering?.Fidelity.ToString().ToLowerInvariant(),
-                width = rendering?.Width,
-                height = rendering?.Height,
-                source_width = rendering?.SourceWidth,
-                source_height = rendering?.SourceHeight,
-                expires_at = rendering?.ExpiresAt,
+                generation = screenshot?.Generation,
+                sequence = screenshot?.Sequence,
+                screenshot_id = screenshot?.Id.Value,
+                source_width = screenshot?.SourceWidth,
+                source_height = screenshot?.SourceHeight,
+                received_at = screenshot?.ReceivedAt,
+                expires_at = screenshot?.ExpiresAt,
             });
         }
 
@@ -456,16 +450,6 @@ internal sealed class ConsoleTools(
                 result.Outcome == AutomationOutcome.Completed ? null : AutomationRecovery(result.Outcome),
                 result.Outcome is AutomationOutcome.BridgeUnavailable or AutomationOutcome.ScreenshotFailed),
         ];
-        renderingIndex = 0;
-        foreach (AutomationCapture capture in result.Captures)
-        {
-            if (capture.Screenshot is not null)
-            {
-                RetainedRendering rendering = renderings[renderingIndex++];
-                content.Add(new TextContentBlock { Text = $"Screenshot: {capture.Name}" });
-                content.Add(ImageContentBlock.FromBytes(rendering.Jpeg, "image/jpeg"));
-            }
-        }
         return new()
         {
             Content = content,
@@ -542,7 +526,8 @@ internal sealed class ConsoleTools(
         string outcome,
         string detail,
         bool isError) => isError
-            ? ToolError(outcome, detail, recovery: ControlRecovery(outcome), retryable: outcome is "timed_out" or "unavailable")
+            ? ToolError(outcome, detail, recovery: ControlRecovery(outcome), retryable:
+                outcome is "control_request_timed_out" or "control_unavailable")
             : Success(outcome, detail, new { has_control = true });
 
     private static TextContentBlock EnvelopeBlock(
