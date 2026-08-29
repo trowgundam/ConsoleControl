@@ -14,7 +14,7 @@ internal static class DaemonSessionLockChecks
                 ?? throw new InvalidOperationException("the first daemon session lock was refused"))
             {
                 using DaemonSessionLock? second = DaemonSessionLock.TryAcquire(path);
-                Require(second is null, "a second daemon acquired the same console session lock");
+                TestAssert.Require(second is null, "a second daemon acquired the same console session lock");
             }
 
             using DaemonSessionLock reacquired = DaemonSessionLock.TryAcquire(path)
@@ -26,14 +26,6 @@ internal static class DaemonSessionLockChecks
             {
                 Directory.Delete(directory, recursive: true);
             }
-        }
-    }
-
-    private static void Require(bool condition, string message)
-    {
-        if (!condition)
-        {
-            throw new InvalidOperationException(message);
         }
     }
 }

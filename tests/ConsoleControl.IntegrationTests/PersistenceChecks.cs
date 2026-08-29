@@ -37,7 +37,7 @@ internal static class PersistenceChecks
         {
             GuiConfigurationStore first = new(path);
             GuiConfiguration initial = first.Load();
-            Require(initial.Profiles.IsEmpty && initial.LastInputSource is null,
+            TestAssert.Require(initial.Profiles.IsEmpty && initial.LastInputSource is null,
                 "a missing GUI configuration did not produce defaults");
 
             InputProfile profile = DefaultInputProfiles.For(
@@ -50,15 +50,15 @@ internal static class PersistenceChecks
             await first.RememberWindowAsync(new(1280, 720, true), CancellationToken.None);
 
             GuiConfiguration reloaded = new GuiConfigurationStore(path).Load();
-            Require(reloaded.Profiles is [var reloadedProfile]
+            TestAssert.Require(reloaded.Profiles is [var reloadedProfile]
                     && reloadedProfile.Key == profile.Key
                     && reloadedProfile.DigitalBindings.Length == profile.DigitalBindings.Length
                     && reloadedProfile.StickBindings.Length == profile.StickBindings.Length
                     && reloadedProfile.TriggerBindings.Length == profile.TriggerBindings.Length,
                 "a GUI profile did not round-trip");
-            Require(reloaded.LastInputSource == profile.Key,
+            TestAssert.Require(reloaded.LastInputSource == profile.Key,
                 "concurrent GUI preference writes lost the selected source");
-            Require(reloaded.Window == new GuiWindowState(1280, 720, true),
+            TestAssert.Require(reloaded.Window == new GuiWindowState(1280, 720, true),
                 "concurrent GUI preference writes lost the window state");
         }
         finally
@@ -87,14 +87,14 @@ internal static class PersistenceChecks
                 new { SchemaVersion = 1, LastInputSource = profile.Key }, json));
 
             GuiConfiguration migrated = new GuiConfigurationStore(path).Load();
-            Require(migrated.Profiles is [var migratedProfile]
+            TestAssert.Require(migrated.Profiles is [var migratedProfile]
                     && migratedProfile.Key == profile.Key
                     && migratedProfile.DigitalBindings.Length == profile.DigitalBindings.Length
                     && migratedProfile.StickBindings.Length == profile.StickBindings.Length
                     && migratedProfile.TriggerBindings.Length == profile.TriggerBindings.Length
                     && migrated.LastInputSource == profile.Key,
                 "legacy GUI input settings were not imported");
-            Require(File.Exists(legacyProfiles) && File.Exists(legacyPreferences),
+            TestAssert.Require(File.Exists(legacyProfiles) && File.Exists(legacyPreferences),
                 "legacy GUI input settings were deleted during import");
         }
         finally
@@ -126,14 +126,6 @@ internal static class PersistenceChecks
         finally
         {
             File.Delete(path);
-        }
-    }
-
-    private static void Require(bool condition, string message)
-    {
-        if (!condition)
-        {
-            throw new InvalidOperationException(message);
         }
     }
 }

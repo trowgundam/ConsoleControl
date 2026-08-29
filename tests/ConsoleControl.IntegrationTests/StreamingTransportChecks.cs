@@ -81,7 +81,7 @@ internal static class StreamingTransportChecks
             ConsoleControl.Core.ControlPriority.InteractiveUser, CancellationToken.None);
 
         AutomationSessionEnd ended = await automation.Completion.WaitAsync(TimeSpan.FromSeconds(1));
-        Require(ended.Reason == AutomationSessionEndReason.Preempted,
+        TestAssert.Require(ended.Reason == AutomationSessionEndReason.Preempted,
             "automation completion did not report interactive takeover");
         await interactive.DisposeAsync();
 
@@ -97,9 +97,9 @@ internal static class StreamingTransportChecks
         await using GrpcConsoleSession session = GrpcConsoleSession.Connect(address);
         IAutomationSession control = await session.RequestAutomationControlAsync(
             "Verify lease heartbeats.", CancellationToken.None);
-        Require(!runtime.ControlAvailable, "automation did not acquire the control lease");
+        TestAssert.Require(!runtime.ControlAvailable, "automation did not acquire the control lease");
         await Task.Delay(TimeSpan.FromMilliseconds(1200));
-        Require(!runtime.ControlAvailable, "automation heartbeats did not retain the control lease");
+        TestAssert.Require(!runtime.ControlAvailable, "automation heartbeats did not retain the control lease");
         await control.DisposeAsync();
         await WaitUntilAsync(() => runtime.ControlAvailable, TimeSpan.FromSeconds(1));
     }
@@ -115,9 +115,9 @@ internal static class StreamingTransportChecks
         Task<IAutomationSession> declinedRequest = agent.RequestAutomationControlAsync(
             "Test the visible request reason.", CancellationToken.None);
         PendingControlRequest pending = await WaitForPendingRequestAsync(gui);
-        Require(pending.Reason == "Test the visible request reason.",
+        TestAssert.Require(pending.Reason == "Test the visible request reason.",
             "the daemon did not preserve the agent's control request reason");
-        Require(await gui.DeclineControlRequestAsync(pending.Id, CancellationToken.None),
+        TestAssert.Require(await gui.DeclineControlRequestAsync(pending.Id, CancellationToken.None),
             "the GUI client could not decline the pending request");
         try
         {
@@ -171,14 +171,14 @@ internal static class StreamingTransportChecks
         }
 
         await WaitUntilAsync(() => output.Last == latest, TimeSpan.FromSeconds(1));
-        Require(output.Count - beforeBurst <= 10,
+        TestAssert.Require(output.Count - beforeBurst <= 10,
             "a burst of 200 states was not coalesced before reaching the bridge");
 
         int beforeHold = output.Count;
         ControllerState held = ControllerState.Neutral with { Buttons = GameButtons.B };
         await control.SetStateAsync(held, CancellationToken.None);
         await WaitUntilAsync(() => output.Count >= beforeHold + 4, TimeSpan.FromSeconds(1));
-        Require(output.Since(beforeHold).Take(4).All(state => state == held),
+        TestAssert.Require(output.Since(beforeHold).Take(4).All(state => state == held),
             "a held state was not refreshed continuously without neutral gaps");
         await control.SetStateAsync(ControllerState.Neutral, CancellationToken.None);
         await WaitUntilAsync(() => output.Last == ControllerState.Neutral, TimeSpan.FromSeconds(1));
@@ -195,7 +195,7 @@ internal static class StreamingTransportChecks
         int releasedIndex = tapStates.ToList().FindIndex(
             pressedIndex + 1,
             state => state == ControllerState.Neutral);
-        Require(pressedIndex >= 0 && releasedIndex > pressedIndex,
+        TestAssert.Require(pressedIndex >= 0 && releasedIndex > pressedIndex,
             "a press and release submitted before the state pump ran were coalesced away");
 
         await control.SetStateAsync(ControllerState.Neutral, CancellationToken.None);
@@ -204,14 +204,14 @@ internal static class StreamingTransportChecks
 
     private static void VerifyCadencePolicy()
     {
-        Require(GrpcConsoleSession.ControlStateRefreshInterval < TimeSpan.FromMilliseconds(250),
+        TestAssert.Require(GrpcConsoleSession.ControlStateRefreshInterval < TimeSpan.FromMilliseconds(250),
             "the control-state refresh does not arrive before the firmware neutral timeout");
-        Require(GrpcConsoleSession.RequiresCadenceDelay(
+        TestAssert.Require(GrpcConsoleSession.RequiresCadenceDelay(
             hasPending: true,
             nextIsNeutral: false,
             heartbeatDue: false),
             "an ordinary pending state bypassed the 60 Hz cadence");
-        Require(!GrpcConsoleSession.RequiresCadenceDelay(
+        TestAssert.Require(!GrpcConsoleSession.RequiresCadenceDelay(
             hasPending: true,
             nextIsNeutral: true,
             heartbeatDue: false),
@@ -237,7 +237,7 @@ internal static class StreamingTransportChecks
         await using IControlSession recovered = await session.TakeControlAsync(
             ConsoleControl.Core.ControlPriority.InteractiveUser,
             CancellationToken.None);
-        Require(recovered.ConnectionState == ControlConnectionState.Ready,
+        TestAssert.Require(recovered.ConnectionState == ControlConnectionState.Ready,
             "cancelled startup left a hidden control session in the client");
     }
 
@@ -271,7 +271,7 @@ internal static class StreamingTransportChecks
         using AsyncDuplexStreamingCall<ControlStreamRequest, ControlStreamEvent> call =
             client.Control(cancellationToken: streamStop.Token);
         await call.RequestStream.WriteAsync(OpenRequest(), CancellationToken.None);
-        Require(await call.ResponseStream.MoveNext(CancellationToken.None) &&
+        TestAssert.Require(await call.ResponseStream.MoveNext(CancellationToken.None) &&
                 call.ResponseStream.Current.BodyCase == ControlStreamEvent.BodyOneofCase.Granted,
             "the daemon did not grant the abrupt-cancellation test stream");
 
@@ -280,7 +280,7 @@ internal static class StreamingTransportChecks
         await WaitUntilAsync(() => output.Last == pressed, TimeSpan.FromSeconds(1));
         streamStop.Cancel();
         await WaitUntilAsync(() => runtime.ControlAvailable, TimeSpan.FromSeconds(1));
-        Require(output.Last == ControllerState.Neutral,
+        TestAssert.Require(output.Last == ControllerState.Neutral,
             "abrupt stream cancellation did not neutralize the bridge");
     }
 
@@ -293,14 +293,14 @@ internal static class StreamingTransportChecks
         ConsoleControlService.ConsoleControlServiceClient client = new(channel);
         using AsyncDuplexStreamingCall<ControlStreamRequest, ControlStreamEvent> call = client.Control();
         await call.RequestStream.WriteAsync(OpenRequest(), CancellationToken.None);
-        Require(await call.ResponseStream.MoveNext(CancellationToken.None),
+        TestAssert.Require(await call.ResponseStream.MoveNext(CancellationToken.None),
             "the daemon did not grant the inactivity test stream");
         ControllerState pressed = ControllerState.Neutral with { Buttons = GameButtons.B };
         await call.RequestStream.WriteAsync(StateRequest(pressed), CancellationToken.None);
         await WaitUntilAsync(() => output.Last == pressed, TimeSpan.FromSeconds(1));
 
         await WaitUntilAsync(() => runtime.ControlAvailable, TimeSpan.FromSeconds(2));
-        Require(output.Last == ControllerState.Neutral,
+        TestAssert.Require(output.Last == ControllerState.Neutral,
             "an inactive stream did not neutralize the bridge");
     }
 
@@ -338,14 +338,6 @@ internal static class StreamingTransportChecks
                 throw new InvalidOperationException("Timed out waiting for the streaming transport condition.");
             }
             await Task.Delay(10);
-        }
-    }
-
-    private static void Require(bool condition, string message)
-    {
-        if (!condition)
-        {
-            throw new InvalidOperationException(message);
         }
     }
 

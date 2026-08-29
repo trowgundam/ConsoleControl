@@ -15,9 +15,9 @@ internal static class AutomationChecks
             new AutomationCommand.Pause(TimeSpan.FromSeconds(1)),
             new AutomationCommand.Capture("during-hold"),
         ], CaptureStart: true, CaptureEnd: true).Compile();
-        Require(compiled.CompletionAt == TimeSpan.FromMilliseconds(4080),
+        TestAssert.Require(compiled.CompletionAt == TimeSpan.FromMilliseconds(4080),
             "a timed hold did not extend macro completion independently of the cursor");
-        Require(compiled.Events.Single(item => item.CaptureName == "during-hold").Offset ==
+        TestAssert.Require(compiled.Events.Single(item => item.CaptureName == "during-hold").Offset ==
                 TimeSpan.FromMilliseconds(1080),
             "press and pause cursor advancement produced the wrong screenshot offset");
 
@@ -49,11 +49,11 @@ internal static class AutomationChecks
                 CancellationToken.None);
             ControlLease interactive = await console.AcquireControlAsync(
                 interactiveOwner, ControlPriority.InteractiveUser, CancellationToken.None);
-            Require(revoked.IsCancellationRequested,
+            TestAssert.Require(revoked.IsCancellationRequested,
                 "interactive takeover did not cancel automation execution");
-            Require(takeoverOutput.States[^1] == ControllerState.Neutral,
+            TestAssert.Require(takeoverOutput.States[^1] == ControllerState.Neutral,
                 "interactive takeover did not neutralize automation before granting control");
-            Require(!await console.TryReleaseControlAsync(
+            TestAssert.Require(!await console.TryReleaseControlAsync(
                     automationOwner, automation.Generation, CancellationToken.None),
                 "cleanup from a preempted generation affected interactive control");
             await console.SetControllerStateAsync(
@@ -61,7 +61,7 @@ internal static class AutomationChecks
                 interactive.Generation,
                 ControllerState.Neutral with { Buttons = GameButtons.A },
                 CancellationToken.None);
-            Require(takeoverOutput.States[^1].Buttons == GameButtons.A,
+            TestAssert.Require(takeoverOutput.States[^1].Buttons == GameButtons.A,
                 "interactive input did not work after automation preemption");
         }
 
@@ -82,11 +82,11 @@ internal static class AutomationChecks
                         CanonicalDigitalControl.A, TimeSpan.FromMilliseconds(20)),
                 ]),
                 CancellationToken.None);
-            Require(result.Outcome == AutomationOutcome.Completed,
+            TestAssert.Require(result.Outcome == AutomationOutcome.Completed,
                 "overlapping macro did not complete");
             int overlap = macroOutput.States.FindIndex(state =>
                 state.Buttons == (GameButtons.RightShoulder | GameButtons.A));
-            Require(overlap > 0
+            TestAssert.Require(overlap > 0
                 && macroOutput.States.Take(overlap).Any(state =>
                     state.Buttons == GameButtons.RightShoulder)
                 && macroOutput.States.Skip(overlap + 1).Any(state =>
@@ -109,9 +109,9 @@ internal static class AutomationChecks
                         CanonicalDigitalControl.B, TimeSpan.FromMilliseconds(400)),
                 ]),
                 CancellationToken.None);
-            Require(result.Outcome == AutomationOutcome.Completed,
+            TestAssert.Require(result.Outcome == AutomationOutcome.Completed,
                 "a sustained automation hold did not complete");
-            Require(sustainedHoldOutput.States.Count(state => state.Buttons == GameButtons.B) >= 4,
+            TestAssert.Require(sustainedHoldOutput.States.Count(state => state.Buttons == GameButtons.B) >= 4,
                 "automation did not refresh a held state before the firmware safety timeout");
         }
 
@@ -133,18 +133,10 @@ internal static class AutomationChecks
                     new AutomationCommand.Capture("failed-frame"),
                 ]),
                 CancellationToken.None);
-            Require(result.Outcome == AutomationOutcome.ScreenshotFailed
+            TestAssert.Require(result.Outcome == AutomationOutcome.ScreenshotFailed
                 && result.Captures is [{ Name: "failed-frame", Screenshot: null, Failure: not null }]
                 && screenshotFailureOutput.States[^1] == ControllerState.Neutral,
                 "screenshot failure did not stop, report the failed capture, and neutralize input");
-        }
-    }
-
-    private static void Require(bool condition, string message)
-    {
-        if (!condition)
-        {
-            throw new InvalidOperationException(message);
         }
     }
 

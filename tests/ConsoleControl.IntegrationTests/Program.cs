@@ -137,17 +137,17 @@ ControllerState mapped = InputMapper.Map(mappingProfile, new(
         .Add(new("axis.x"), 1f)
         .Add(new("axis.y"), -1f)
         .Add(new("axis.trigger"), 0.75f)));
-Require(mapped.Buttons.HasFlag(GameButtons.A), "many-to-one mapping omitted A");
-Require(mapped.Buttons.HasFlag(GameButtons.RightShoulder), "one-to-many mapping omitted R");
-Require(mapped.Buttons.HasFlag(GameButtons.RightTrigger), "analog trigger omitted digital ZR");
-Require(mapped.DPad == HatPosition.UpRight, "D-pad diagonal was not composed");
-Require(mapped.LeftStick == new StickPosition(255, 0), "stick transform was not applied");
-Require(mapped.RightTrigger.Value > 128, "analog trigger value was not retained");
+TestAssert.Require(mapped.Buttons.HasFlag(GameButtons.A), "many-to-one mapping omitted A");
+TestAssert.Require(mapped.Buttons.HasFlag(GameButtons.RightShoulder), "one-to-many mapping omitted R");
+TestAssert.Require(mapped.Buttons.HasFlag(GameButtons.RightTrigger), "analog trigger omitted digital ZR");
+TestAssert.Require(mapped.DPad == HatPosition.UpRight, "D-pad diagonal was not composed");
+TestAssert.Require(mapped.LeftStick == new StickPosition(255, 0), "stick transform was not applied");
+TestAssert.Require(mapped.RightTrigger.Value > 128, "analog trigger value was not retained");
 
 ControllerState overlappingRelease = InputMapper.Map(mappingProfile, new(
     [new("key.two")],
     ImmutableDictionary<HostControlId, float>.Empty));
-Require(overlappingRelease.Buttons == GameButtons.A,
+TestAssert.Require(overlappingRelease.Buttons == GameButtons.A,
     "releasing one of two bindings incorrectly released their shared target");
 
 InputProfile invertedStickProfile = mappingProfile with
@@ -165,7 +165,7 @@ ControllerState sticksUp = InputMapper.Map(invertedStickProfile, new(
     ImmutableDictionary<HostControlId, float>.Empty
         .Add(new("left.y"), -1f)
         .Add(new("right.y"), -1f)));
-Require(sticksUp.LeftStick.Y == byte.MaxValue && sticksUp.RightStick.Y == byte.MaxValue,
+TestAssert.Require(sticksUp.LeftStick.Y == byte.MaxValue && sticksUp.RightStick.Y == byte.MaxValue,
     "inverted Y transforms did not translate upward movement to upward Switch stick values");
 
 await StreamingTransportChecks.RunAsync();
@@ -192,7 +192,7 @@ ControlLease lease = await runtime.AcquireControlAsync(
 
 ControllerState pressed = ControllerState.Neutral with { Buttons = GameButtons.A };
 await runtime.SetControllerStateAsync(owner, lease.Generation, pressed, CancellationToken.None);
-Require(output.States.SequenceEqual([pressed]), "current lease did not reach controller output");
+TestAssert.Require(output.States.SequenceEqual([pressed]), "current lease did not reach controller output");
 
 try
 {
@@ -203,16 +203,16 @@ catch (StaleControlLeaseException)
 {
 }
 
-Require(output.States.Count == 1, "stale lease reached controller output");
+TestAssert.Require(output.States.Count == 1, "stale lease reached controller output");
 output.Disconnect();
 await runtime.SetControllerStateAsync(owner, lease.Generation, ControllerState.Neutral, CancellationToken.None);
-Require(output.ConnectCount == 1 && output.IsConnected,
+TestAssert.Require(output.ConnectCount == 1 && output.IsConnected,
     "a state write did not reconnect the controller bridge");
 bool released = await runtime.TryReleaseControlAsync(owner, lease.Generation, CancellationToken.None);
-Require(released && output.States.SequenceEqual([pressed, ControllerState.Neutral, ControllerState.Neutral]),
+TestAssert.Require(released && output.States.SequenceEqual([pressed, ControllerState.Neutral, ControllerState.Neutral]),
     "stream cleanup did not neutralize and release current control");
 bool staleRelease = await runtime.TryReleaseControlAsync(owner, lease.Generation, CancellationToken.None);
-Require(!staleRelease, "repeated stream cleanup affected a released generation");
+TestAssert.Require(!staleRelease, "repeated stream cleanup affected a released generation");
 
 Console.WriteLine("controller encoding: passed");
 Console.WriteLine("lease generation: passed");
@@ -263,16 +263,8 @@ static void AssertEncoding(ControllerState state, byte[] expected, string name)
 {
     byte[] actual = new byte[ProofBridgeStateEncoder.EncodedLength];
     ProofBridgeStateEncoder.Encode(state, actual);
-    Require(actual.SequenceEqual(expected),
+    TestAssert.Require(actual.SequenceEqual(expected),
         $"{name} encoding mismatch: {Convert.ToHexString(actual)}");
-}
-
-static void Require(bool condition, string message)
-{
-    if (!condition)
-    {
-        throw new InvalidOperationException(message);
-    }
 }
 
 file sealed class FakeControllerOutput : IControllerOutput

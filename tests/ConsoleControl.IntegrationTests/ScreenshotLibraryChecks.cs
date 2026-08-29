@@ -17,36 +17,36 @@ internal static class ScreenshotLibraryChecks
 
         Screenshot source = CreateScreenshot(sequence: 41);
         RetainedRendering low = library.AddAndRender(source, ScreenshotFidelity.Low);
-        Require(low.Width == 640 && low.Height == 360,
+        TestAssert.Require(low.Width == 640 && low.Height == 360,
             "low fidelity did not render at 640x360");
-        Require(!low.Jpeg.SequenceEqual(source.Jpeg),
+        TestAssert.Require(!low.Jpeg.SequenceEqual(source.Jpeg),
             "low fidelity returned the full-resolution source bytes");
 
         ScreenshotRenderResult highResult = library.Render(low.Id, ScreenshotFidelity.High);
-        Require(highResult is ScreenshotRenderResult.Found high
+        TestAssert.Require(highResult is ScreenshotRenderResult.Found high
             && high.Rendering.Id == low.Id
             && high.Rendering.Jpeg.SequenceEqual(source.Jpeg),
             "high fidelity did not return exact original bytes for the same screenshot ID");
 
         time.Advance(TimeSpan.FromMinutes(5));
-        Require(library.Render(low.Id, ScreenshotFidelity.Medium)
+        TestAssert.Require(library.Render(low.Id, ScreenshotFidelity.Medium)
                 is ScreenshotRenderResult.Unavailable { Reason: ScreenshotUnavailableReason.Expired },
             "expired screenshot did not return an explicit expired outcome");
 
         RetainedRendering first = library.AddAndRender(CreateScreenshot(42), ScreenshotFidelity.Low);
         RetainedRendering second = library.AddAndRender(CreateScreenshot(43), ScreenshotFidelity.Low);
         RetainedRendering third = library.AddAndRender(CreateScreenshot(44), ScreenshotFidelity.Low);
-        Require(library.Render(first.Id, ScreenshotFidelity.Low)
+        TestAssert.Require(library.Render(first.Id, ScreenshotFidelity.Low)
                 is ScreenshotRenderResult.Unavailable { Reason: ScreenshotUnavailableReason.Evicted },
             "entry-count eviction did not preserve a useful eviction outcome");
-        Require(library.Render(second.Id, ScreenshotFidelity.Low) is ScreenshotRenderResult.Found
+        TestAssert.Require(library.Render(second.Id, ScreenshotFidelity.Low) is ScreenshotRenderResult.Found
             && library.Render(third.Id, ScreenshotFidelity.Low) is ScreenshotRenderResult.Found,
             "entry-count eviction removed a retained screenshot");
 
         ImmutableArray<RetainedRendering> batch = library.AddBatchAndRender(
             [CreateScreenshot(45), CreateScreenshot(46)],
             ScreenshotFidelity.Medium);
-        Require(batch.Length == 2
+        TestAssert.Require(batch.Length == 2
             && batch.All(rendering => rendering.Width == 1280 && rendering.Height == 720)
             && batch.All(rendering =>
                 library.Render(rendering.Id, ScreenshotFidelity.High) is ScreenshotRenderResult.Found),
@@ -61,7 +61,7 @@ internal static class ScreenshotLibraryChecks
         }
         catch (ScreenshotRetentionException exception)
         {
-            Require(exception.Message.Contains("Capture fewer screenshots", StringComparison.Ordinal),
+            TestAssert.Require(exception.Message.Contains("Capture fewer screenshots", StringComparison.Ordinal),
                 "retention failure did not tell the agent how to recover");
         }
     }
@@ -73,14 +73,6 @@ internal static class ScreenshotLibraryChecks
         using SKImage image = SKImage.FromBitmap(bitmap);
         using SKData encoded = image.Encode(SKEncodedImageFormat.Jpeg, 92);
         return new(1, sequence, new(1920, 1080, 60), DateTimeOffset.UtcNow, encoded.ToArray());
-    }
-
-    private static void Require(bool condition, string message)
-    {
-        if (!condition)
-        {
-            throw new InvalidOperationException(message);
-        }
     }
 
     private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider

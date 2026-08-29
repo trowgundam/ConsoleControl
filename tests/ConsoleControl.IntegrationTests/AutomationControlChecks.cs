@@ -14,16 +14,16 @@ internal static class AutomationControlChecks
     {
         FakeConsoleSession console = new();
         await using AutomationControl control = new(console);
-        Require(await control.RequestControlAsync("initial", CancellationToken.None),
+        TestAssert.Require(await control.RequestControlAsync("initial", CancellationToken.None),
             "the initial automation lease was not acquired");
-        Require(control.HasControl, "automation did not report its live lease");
+        TestAssert.Require(control.HasControl, "automation did not report its live lease");
 
         console.Current!.Complete(AutomationSessionEndReason.Preempted);
         await console.Current.Completion.WaitAsync(TimeSpan.FromSeconds(1));
         await WaitUntilAsync(() => !control.HasControl, TimeSpan.FromSeconds(1));
-        Require(await control.RequestControlAsync("reacquire", CancellationToken.None),
+        TestAssert.Require(await control.RequestControlAsync("reacquire", CancellationToken.None),
             "automation treated a completed lease as still owned");
-        Require(console.RequestCount == 2,
+        TestAssert.Require(console.RequestCount == 2,
             "automation reported control without making a second acquisition request");
 
         console.Current.Result = CreateCaptureResult();
@@ -33,13 +33,13 @@ internal static class AutomationControlChecks
             startScreenshot: false,
             endScreenshot: false,
             CancellationToken.None);
-        Require(sequenceResult.Content is [TextContentBlock],
+        TestAssert.Require(sequenceResult.Content is [TextContentBlock],
             "a sequence capture returned inline image content instead of metadata only");
         TextContentBlock sequenceText = (TextContentBlock)sequenceResult.Content[0];
         using JsonDocument sequenceEnvelope = JsonDocument.Parse(sequenceText.Text);
         JsonElement capture = sequenceEnvelope.RootElement.GetProperty("data")
             .GetProperty("captures")[0];
-        Require(capture.GetProperty("screenshot_id").GetString()?.StartsWith("ss_", StringComparison.Ordinal) == true,
+        TestAssert.Require(capture.GetProperty("screenshot_id").GetString()?.StartsWith("ss_", StringComparison.Ordinal) == true,
             "a sequence capture did not return its retained screenshot ID");
     }
 
@@ -49,14 +49,6 @@ internal static class AutomationControlChecks
         while (!condition())
         {
             await Task.Delay(10, stop.Token);
-        }
-    }
-
-    private static void Require(bool condition, string message)
-    {
-        if (!condition)
-        {
-            throw new InvalidOperationException(message);
         }
     }
 

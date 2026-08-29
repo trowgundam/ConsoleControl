@@ -19,25 +19,25 @@ internal static class ControllerBridgeChecks
         await bridges.InitializeAsync(CancellationToken.None);
 
         ControllerBridgeStatus statusBeforeInventory = await bridges.GetStatusAsync(CancellationToken.None);
-        Require(adapter.EnumerationCount == 0
+        TestAssert.Require(adapter.EnumerationCount == 0
             && statusBeforeInventory.Availability == HardwareAvailability.Unknown,
             "cached controller bridge status unexpectedly scanned Bluetooth hardware");
 
         ControllerBridgeInventory initial = await bridges.GetInventoryAsync(CancellationToken.None);
-        Require(initial.Revision == 0 && initial.SelectedBridgeId is null
+        TestAssert.Require(initial.Revision == 0 && initial.SelectedBridgeId is null
             && initial.Bridges.Length == 2
             && initial.State == ControllerBridgeState.SelectionRequired,
             "initial bridge inventory did not require an explicit selection");
 
         ControllerBridgeSelection selected = await bridges.SelectAsync(
             firstId, initial.Revision, CancellationToken.None);
-        Require(selected.Revision == 1 && selected.BridgeId == firstId
+        TestAssert.Require(selected.Revision == 1 && selected.BridgeId == firstId
             && store.Selection == firstId,
             "bridge selection was not published and persisted");
 
         ControllerBridgeSelection repeated = await bridges.SelectAsync(
             firstId, selected.Revision, CancellationToken.None);
-        Require(repeated.Revision == selected.Revision && adapter.ConfigureCount == 1,
+        TestAssert.Require(repeated.Revision == selected.Revision && adapter.ConfigureCount == 1,
             "reselecting the current bridge was not idempotent");
 
         try
@@ -66,17 +66,9 @@ internal static class ControllerBridgeChecks
 
         ControllerBridgeSelection changed = await console.SelectControllerBridgeAsync(
             secondId, selected.Revision, CancellationToken.None);
-        Require(changed.BridgeId == secondId && changed.Revision == 2
+        TestAssert.Require(changed.BridgeId == secondId && changed.Revision == 2
             && adapter.SelectedBridgeId == secondId,
             "bridge selection did not change after control was released");
-    }
-
-    private static void Require(bool condition, string message)
-    {
-        if (!condition)
-        {
-            throw new InvalidOperationException(message);
-        }
     }
 
     private sealed class FakeBridgeAdapter(ImmutableArray<ControllerBridge> bridges)

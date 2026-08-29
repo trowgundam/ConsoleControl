@@ -25,12 +25,12 @@ internal static class VideoRuntimeChecks
             await runtime.InitializeAsync(CancellationToken.None);
             int enumerationsAfterInitialization = adapter.EnumerationCount;
             VideoCaptureStatus cachedStatus = runtime.GetStatus();
-            Require(adapter.EnumerationCount == enumerationsAfterInitialization
+            TestAssert.Require(adapter.EnumerationCount == enumerationsAfterInitialization
                 && cachedStatus.SelectedSourceId is null
                 && cachedStatus.CaptureState == VideoCaptureState.SelectionRequired,
                 "cached video status unexpectedly enumerated capture hardware");
             VideoInventory initial = await runtime.GetInventoryAsync(CancellationToken.None);
-            Require(initial.SelectedSourceId is null && initial.Revision == 0 && adapter.OpenCount == 0,
+            TestAssert.Require(initial.SelectedSourceId is null && initial.Revision == 0 && adapter.OpenCount == 0,
                 "video initialization silently selected a capture source");
 
             FakeVideoAdapter failedAdapter = new([first]);
@@ -47,7 +47,7 @@ internal static class VideoRuntimeChecks
             {
             }
             VideoInventory afterFailedWrite = await failedRuntime.GetInventoryAsync(CancellationToken.None);
-            Require(afterFailedWrite.SelectedSourceId is null
+            TestAssert.Require(afterFailedWrite.SelectedSourceId is null
                 && afterFailedWrite.Revision == 0
                 && failedAdapter.OpenCount == 0,
                 "a failed persistence write changed the live video selection");
@@ -56,7 +56,7 @@ internal static class VideoRuntimeChecks
                 first.Id,
                 initial.Revision,
                 CancellationToken.None);
-            Require(firstSelection.SourceId == first.Id && firstSelection.Revision == 1,
+            TestAssert.Require(firstSelection.SourceId == first.Id && firstSelection.Revision == 1,
                 "explicit video selection did not persist the selected source");
 
             await WaitUntilAsync(
@@ -70,12 +70,12 @@ internal static class VideoRuntimeChecks
             await session.WriteAsync([0xFF, 0xD8, 0x03, 0xFF, 0xD9]);
             await Task.Delay(20);
             EncodedVideoFrame latest = await subscription.WaitForNextAsync(CancellationToken.None);
-            Require(latest.Jpeg[2] == 3,
+            TestAssert.Require(latest.Jpeg[2] == 3,
                 "the video hub retained a stale frame instead of the newest frame");
             Screenshot firstCopy = runtime.CaptureLatest();
             firstCopy.Jpeg[2] = 0x7F;
             Screenshot secondCopy = runtime.CaptureLatest();
-            Require(secondCopy.Jpeg[2] == 3,
+            TestAssert.Require(secondCopy.Jpeg[2] == 3,
                 "a screenshot caller could mutate the retained video frame");
 
             adapter.Available = false;
@@ -98,14 +98,14 @@ internal static class VideoRuntimeChecks
             await adapter.Current!.WriteAsync([0xFF, 0xD8, 0x04, 0xFF, 0xD9]);
             EncodedVideoFrame recovered = await replacementSubscription.WaitForNextAsync(
                 CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(1));
-            Require(recovered.Jpeg[2] == 4,
+            TestAssert.Require(recovered.Jpeg[2] == 4,
                 "video capture did not publish a frame after its source returned");
 
             VideoSelection selected = await runtime.SelectAsync(
                 second.Id,
                 firstSelection.Revision,
                 CancellationToken.None);
-            Require(selected.SourceId == second.Id && selected.Revision == 2,
+            TestAssert.Require(selected.SourceId == second.Id && selected.Revision == 2,
                 "video source selection did not advance its revision");
             try
             {
@@ -122,7 +122,7 @@ internal static class VideoRuntimeChecks
                 new VideoStreamAddress(new Uri("http://127.0.0.1:5042/video/live.mjpeg")));
             await missingRuntime.InitializeAsync(CancellationToken.None);
             VideoInventory missing = await missingRuntime.GetInventoryAsync(CancellationToken.None);
-            Require(missing.SelectedSourceId == second.Id
+            TestAssert.Require(missing.SelectedSourceId == second.Id
                 && missing.Revision == 2
                 && missingAdapter.OpenCount == 0,
                 "video initialization replaced an unavailable persisted source");
@@ -131,10 +131,10 @@ internal static class VideoRuntimeChecks
             await WaitUntilAsync(
                 () => missingAdapter.OpenCount >= 1 && missingAdapter.LastOpened?.Id == second.Id,
                 TimeSpan.FromSeconds(2));
-            Require(missingAdapter.LastOpened?.Id == second.Id,
+            TestAssert.Require(missingAdapter.LastOpened?.Id == second.Id,
                 "video recovery did not wait for the exact persisted source");
             VideoInventory recoveredInventory = await missingRuntime.GetInventoryAsync(CancellationToken.None);
-            Require(recoveredInventory.SelectedSourceId == second.Id && recoveredInventory.Revision == 2,
+            TestAssert.Require(recoveredInventory.SelectedSourceId == second.Id && recoveredInventory.Revision == 2,
                 "video recovery changed the persisted selection");
         }
         finally
@@ -152,7 +152,7 @@ internal static class VideoRuntimeChecks
         {
             count++;
         }
-        Require(count >= minimumFrames,
+        TestAssert.Require(count >= minimumFrames,
             $"multipart reader decoded {count} frames; expected at least {minimumFrames}");
     }
 
@@ -165,16 +165,8 @@ internal static class VideoRuntimeChecks
             0xFF, 0xC0, 0x00, 0x07, 0x08, 0x04, 0x38, 0x07, 0x80,
             0xFF, 0xD9,
         ];
-        Require(JpegDimensions.Read(jpeg) == (1920, 1080),
+        TestAssert.Require(JpegDimensions.Read(jpeg) == (1920, 1080),
             "JPEG SOF dimensions were parsed incorrectly");
-    }
-
-    private static void Require(bool condition, string message)
-    {
-        if (!condition)
-        {
-            throw new InvalidOperationException(message);
-        }
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)

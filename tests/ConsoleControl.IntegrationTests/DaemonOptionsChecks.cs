@@ -5,7 +5,7 @@ internal static class DaemonOptionsChecks
     public static void Run()
     {
         DaemonOptions defaults = DaemonOptions.Parse([]);
-        Require(defaults.Port == 5041 && defaults.VideoPort == 5042,
+        TestAssert.Require(defaults.Port == 5041 && defaults.VideoPort == 5042,
             "default daemon listeners changed unexpectedly");
 
         RequireRejected(
@@ -34,14 +34,6 @@ internal static class DaemonOptionsChecks
         }
         catch (ArgumentException)
         {
-        }
-    }
-
-    private static void Require(bool condition, string message)
-    {
-        if (!condition)
-        {
-            throw new InvalidOperationException(message);
         }
     }
 }
