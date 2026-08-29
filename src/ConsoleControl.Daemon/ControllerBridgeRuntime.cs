@@ -291,11 +291,18 @@ internal sealed class ControllerBridgeSelectionStore(string? path = null)
         StoredSelection? stored = await JsonSerializer.DeserializeAsync<StoredSelection>(
             stream,
             cancellationToken: cancellationToken).ConfigureAwait(false);
-        return stored is null
-            ? new(null, 0)
-            : new(
-                string.IsNullOrWhiteSpace(stored.BridgeId) ? null : new(stored.BridgeId),
-                stored.Revision);
+        if (stored is null)
+        {
+            return new(null, 0);
+        }
+        if (stored.SchemaVersion != 1)
+        {
+            throw new InvalidDataException(
+                $"Unsupported controller bridge selection schema {stored.SchemaVersion}.");
+        }
+        return new(
+            string.IsNullOrWhiteSpace(stored.BridgeId) ? null : new(stored.BridgeId),
+            stored.Revision);
     }
 
     public async Task WriteAsync(

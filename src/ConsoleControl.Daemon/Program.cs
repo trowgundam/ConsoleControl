@@ -40,9 +40,8 @@ ControllerBridgeRuntime controllerOutput = new(controllerAdapter, new Controller
 builder.Services.AddSingleton(controllerOutput);
 builder.Services.AddSingleton<IControllerOutput>(controllerOutput);
 builder.Services.AddSingleton<ConsoleRuntime>();
-builder.Services.AddSingleton<InputProfileStore>();
 builder.Services.AddSingleton<IVideoCaptureAdapter, FfmpegVideoCaptureAdapter>();
-builder.Services.AddSingleton<VideoSelectionStore>();
+builder.Services.AddSingleton<IVideoSelectionStore, VideoSelectionStore>();
 builder.Services.AddSingleton(new VideoStreamAddress(
     new Uri($"http://127.0.0.1:{options.VideoPort}/video/live.mjpeg")));
 builder.Services.AddSingleton<VideoRuntime>();

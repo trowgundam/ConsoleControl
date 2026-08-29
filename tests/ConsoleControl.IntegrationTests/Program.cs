@@ -5,6 +5,8 @@ using ConsoleControl.Controller.Bluetooth;
 using ConsoleControl.Core;
 using ConsoleControl.Daemon;
 
+using Grpc.Core;
+
 if (args is ["verify-mjpeg", string multipartPath])
 {
     await VideoRuntimeChecks.VerifyMultipartFileAsync(multipartPath, 2);
@@ -166,48 +168,16 @@ ControllerState sticksUp = InputMapper.Map(invertedStickProfile, new(
 Require(sticksUp.LeftStick.Y == byte.MaxValue && sticksUp.RightStick.Y == byte.MaxValue,
     "inverted Y transforms did not translate upward movement to upward Switch stick values");
 
-string profilePath = Path.Combine(Path.GetTempPath(), $"consolecontrol-profile-{Guid.NewGuid():N}.json");
-try
-{
-    InputProfileStore profileStore = new(profilePath);
-    InputConfiguration initialConfiguration = await profileStore.ReadAsync(CancellationToken.None);
-    Require(initialConfiguration.Revision == 0 && initialConfiguration.Profiles.IsEmpty,
-        "a missing profile file did not produce an empty configuration");
-    InputConfiguration savedConfiguration = await profileStore.SaveAsync(
-        mappingProfile,
-        initialConfiguration.Revision,
-        CancellationToken.None);
-    Require(savedConfiguration.Revision == 1 && savedConfiguration.Profiles.SequenceEqual([mappingProfile]),
-        "profile save did not return the updated configuration");
-    InputConfiguration reloadedConfiguration = await profileStore.ReadAsync(CancellationToken.None);
-    Require(reloadedConfiguration.Revision == 1
-        && reloadedConfiguration.Profiles.Length == 1
-        && reloadedConfiguration.Profiles[0].Key == mappingProfile.Key
-        && reloadedConfiguration.Profiles[0].DigitalBindings.Length == mappingProfile.DigitalBindings.Length
-        && reloadedConfiguration.Profiles[0].StickBindings.Length == mappingProfile.StickBindings.Length
-        && reloadedConfiguration.Profiles[0].TriggerBindings.Length == mappingProfile.TriggerBindings.Length,
-        "profile persistence did not round-trip through JSON");
-    try
-    {
-        await profileStore.SaveAsync(mappingProfile, 0, CancellationToken.None);
-        throw new InvalidOperationException("a stale profile revision was accepted");
-    }
-    catch (InputConfigurationConflictException)
-    {
-    }
-}
-finally
-{
-    if (File.Exists(profilePath))
-    {
-        File.Delete(profilePath);
-    }
-}
-
 await StreamingTransportChecks.RunAsync();
 VideoRuntimeChecks.VerifyJpegDimensions();
 await VideoRuntimeChecks.RunAsync();
 await AutomationChecks.RunAsync();
+InputForwardingChecks.Run();
+await AutomationControlChecks.RunAsync();
+DaemonOptionsChecks.Run();
+DaemonSessionLockChecks.Run();
+VerifyControllerStateBoundary();
+await PersistenceChecks.RunAsync();
 ScreenshotLibraryChecks.Run();
 await ControllerBridgeChecks.RunAsync();
 
@@ -254,6 +224,40 @@ Console.WriteLine("video runtime: passed");
 Console.WriteLine("JPEG dimensions: passed");
 Console.WriteLine("automation timeline: passed");
 Console.WriteLine("interactive takeover: passed");
+Console.WriteLine("lossless input forwarding: passed");
+Console.WriteLine("automation ownership visibility: passed");
+Console.WriteLine("controller state boundary: passed");
+Console.WriteLine("configuration schema validation: passed");
+Console.WriteLine("exclusive daemon session: passed");
+
+static void VerifyControllerStateBoundary()
+{
+    ConsoleControlGrpcService.ParseState(new ConsoleControl.Contracts.ControllerStateMessage
+    {
+        Buttons = (uint)GameButtons.Capture,
+        Dpad = (uint)HatPosition.Neutral,
+        LeftStickX = 128,
+        LeftStickY = 128,
+        RightStickX = 128,
+        RightStickY = 128,
+    });
+    try
+    {
+        ConsoleControlGrpcService.ParseState(new ConsoleControl.Contracts.ControllerStateMessage
+        {
+            Buttons = 1u << 15,
+            Dpad = (uint)HatPosition.Neutral,
+            LeftStickX = 128,
+            LeftStickY = 128,
+            RightStickX = 128,
+            RightStickY = 128,
+        });
+        throw new InvalidOperationException("an undefined controller button bit was accepted");
+    }
+    catch (RpcException exception) when (exception.StatusCode == StatusCode.InvalidArgument)
+    {
+    }
+}
 
 static void AssertEncoding(ControllerState state, byte[] expected, string name)
 {

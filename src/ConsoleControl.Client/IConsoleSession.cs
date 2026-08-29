@@ -16,13 +16,6 @@ public interface IConsoleSession : IAsyncDisposable
 {
     Task<ConsoleStatus> GetStatusAsync(CancellationToken cancellationToken);
 
-    Task<InputConfiguration> GetInputConfigurationAsync(CancellationToken cancellationToken);
-
-    Task<InputConfiguration> SaveInputProfileAsync(
-        InputProfile profile,
-        ulong expectedRevision,
-        CancellationToken cancellationToken);
-
     Task<VideoInventory> GetVideoInventoryAsync(CancellationToken cancellationToken);
 
     Task<ControllerBridgeInventory> GetControllerBridgeInventoryAsync(
@@ -55,9 +48,23 @@ public interface IConsoleSession : IAsyncDisposable
 
 public interface IAutomationSession : IAsyncDisposable
 {
+    Task<AutomationSessionEnd> Completion { get; }
+
     Task<AutomationResult> RunAsync(
         AutomationSequence sequence,
         CancellationToken cancellationToken);
+}
+
+public sealed record AutomationSessionEnd(
+    AutomationSessionEndReason Reason,
+    string? Detail);
+
+public enum AutomationSessionEndReason
+{
+    Released,
+    Preempted,
+    BridgeUnavailable,
+    ConnectionLost,
 }
 
 public interface IControlSession : IAsyncDisposable
@@ -80,3 +87,5 @@ public enum ControlConnectionState
     Reconnecting,
     Stopped,
 }
+
+public sealed class ControlConflictException(string message) : Exception(message);

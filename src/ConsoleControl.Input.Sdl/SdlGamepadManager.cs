@@ -17,7 +17,10 @@ public sealed record GamepadDevice(
     public InputProfileKey ProfileKey => new(InputSourceKind.Gamepad, Guid);
 }
 
-public sealed record GamepadSnapshot(GamepadDeviceId Device, HostInputSnapshot State);
+public sealed record GamepadSnapshot(
+    GamepadDeviceId Device,
+    long SelectionGeneration,
+    HostInputSnapshot State);
 
 public sealed class SdlGamepadManager : IAsyncDisposable
 {
@@ -36,6 +39,7 @@ public sealed class SdlGamepadManager : IAsyncDisposable
     private readonly Task _loop;
     private IReadOnlyList<GamepadDevice> _devices = [];
     private GamepadDeviceId? _selected;
+    private long _selectionGeneration;
     private nint _gamepad;
 
     public SdlGamepadManager()
@@ -66,12 +70,14 @@ public sealed class SdlGamepadManager : IAsyncDisposable
     public static IReadOnlyList<(HostControlId Id, string Name)> StandardButtons { get; } =
         Buttons.Select(button => (ButtonId(button), button.ToString())).ToArray();
 
-    public Task SelectAsync(GamepadDeviceId? device, CancellationToken cancellationToken)
+    public Task<long> SelectAsync(GamepadDeviceId? device, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        long generation;
         lock (_gate)
         {
             CloseSelected();
+            _selectionGeneration++;
             _selected = device;
             if (device is not null)
             {
@@ -82,9 +88,10 @@ public sealed class SdlGamepadManager : IAsyncDisposable
                     throw new InvalidOperationException($"SDL could not open the gamepad: {SDL.GetError()}");
                 }
             }
+            generation = _selectionGeneration;
         }
 
-        return Task.CompletedTask;
+        return Task.FromResult(generation);
     }
 
     public async ValueTask DisposeAsync()
@@ -184,6 +191,7 @@ public sealed class SdlGamepadManager : IAsyncDisposable
                 disconnected = selected;
                 CloseSelected();
                 _selected = null;
+                _selectionGeneration++;
             }
         }
 
@@ -226,7 +234,10 @@ public sealed class SdlGamepadManager : IAsyncDisposable
                     : raw < 0 ? raw / 32768f : raw / 32767f;
             }
 
-            return new(_selected!.Value, new(pressed.ToImmutable(), axes.ToImmutable()));
+            return new(
+                _selected!.Value,
+                _selectionGeneration,
+                new(pressed.ToImmutable(), axes.ToImmutable()));
         }
     }
 

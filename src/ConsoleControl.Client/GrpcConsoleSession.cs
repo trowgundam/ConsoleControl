@@ -9,19 +9,21 @@ using Grpc.Net.Client;
 
 using ContractDigital = ConsoleControl.Contracts.CanonicalDigitalControl;
 using ContractPriority = ConsoleControl.Contracts.ControlPriority;
-using ContractSourceKind = ConsoleControl.Contracts.InputSourceKind;
-using ContractStick = ConsoleControl.Contracts.CanonicalStick;
-using ContractTrigger = ConsoleControl.Contracts.CanonicalTrigger;
 using DomainDigital = ConsoleControl.Core.CanonicalDigitalControl;
 using DomainPriority = ConsoleControl.Core.ControlPriority;
-using DomainSourceKind = ConsoleControl.Core.InputSourceKind;
-using DomainStick = ConsoleControl.Core.CanonicalStick;
-using DomainTrigger = ConsoleControl.Core.CanonicalTrigger;
 
 namespace ConsoleControl.Client;
 
 public sealed class GrpcConsoleSession : IConsoleSession
 {
+    internal static readonly TimeSpan ControlStateRefreshInterval = TimeSpan.FromMilliseconds(50);
+
+    internal static bool RequiresCadenceDelay(
+        bool hasPending,
+        bool nextIsNeutral,
+        bool heartbeatDue) =>
+        hasPending && !nextIsNeutral && !heartbeatDue;
+
     private readonly GrpcChannel _channel;
     private readonly ConsoleControlService.ConsoleControlServiceClient _client;
     private readonly ClientId _clientId = new(Guid.NewGuid());
@@ -67,33 +69,6 @@ public sealed class GrpcConsoleSession : IConsoleSession
             ParseBridgeStatus(reply.ControllerBridge),
             ParseVideoStatus(reply.Video),
             pending);
-    }
-
-    public async Task<InputConfiguration> GetInputConfigurationAsync(
-        CancellationToken cancellationToken)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        InputConfigurationReply reply = await _client.GetInputConfigurationAsync(
-            new GetInputConfigurationRequest(),
-            cancellationToken: cancellationToken);
-        return ParseConfiguration(reply);
-    }
-
-    public async Task<InputConfiguration> SaveInputProfileAsync(
-        InputProfile profile,
-        ulong expectedRevision,
-        CancellationToken cancellationToken)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        profile.Validate();
-        InputConfigurationReply reply = await _client.SaveInputProfileAsync(
-            new SaveInputProfileRequest
-            {
-                ExpectedRevision = expectedRevision,
-                Profile = ToMessage(profile),
-            },
-            cancellationToken: cancellationToken);
-        return ParseConfiguration(reply);
     }
 
     public async Task<VideoInventory> GetVideoInventoryAsync(CancellationToken cancellationToken)
@@ -160,18 +135,32 @@ public sealed class GrpcConsoleSession : IConsoleSession
         CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
         if (_control is not null)
         {
             throw new InvalidOperationException("This client already has a control session.");
         }
 
-        _control = new GrpcControlSession(
+        GrpcControlSession control = new(
             _client,
             _clientId,
             priority,
             OnControlReleased);
-        await _control.StartAsync(cancellationToken).ConfigureAwait(false);
-        return _control;
+        _control = control;
+        try
+        {
+            await control.StartAsync(cancellationToken).ConfigureAwait(false);
+            return control;
+        }
+        catch
+        {
+            await control.AbortStartupAsync().ConfigureAwait(false);
+            if (ReferenceEquals(_control, control))
+            {
+                _control = null;
+            }
+            throw;
+        }
     }
 
     public async Task<Screenshot> GetScreenshotAsync(CancellationToken cancellationToken)
@@ -254,9 +243,6 @@ public sealed class GrpcConsoleSession : IConsoleSession
         }
     }
 
-    private static InputConfiguration ParseConfiguration(InputConfigurationReply reply) =>
-        new(reply.Revision, reply.Profiles.Select(ParseProfile).ToImmutableArray());
-
     private static VideoInventory ParseVideoInventory(VideoInventoryReply reply) => new(
         reply.Sources.Select(source => new VideoSource(
             new(source.Id),
@@ -328,66 +314,6 @@ public sealed class GrpcConsoleSession : IConsoleSession
         _ => throw new InvalidOperationException("The daemon returned an unknown hardware availability."),
     };
 
-    private static InputProfile ParseProfile(InputProfileMessage message) => new InputProfile(
-        new((DomainSourceKind)message.SourceKind, message.HardwareId),
-        message.Name,
-        message.DigitalBindings.Select(binding => new DigitalBinding(
-            new(binding.Source),
-            binding.Targets.Select(target => (DomainDigital)target).ToImmutableArray())).ToImmutableArray(),
-        message.StickBindings.Select(binding => new StickBinding(
-            new(binding.XSource),
-            new(binding.YSource),
-            (DomainStick)binding.Target,
-            ParseTransform(binding.XTransform),
-            ParseTransform(binding.YTransform))).ToImmutableArray(),
-        message.TriggerBindings.Select(binding => new TriggerBinding(
-            new(binding.Source),
-            (DomainTrigger)binding.Target,
-            ParseTransform(binding.Transform),
-            binding.DigitalThreshold)).ToImmutableArray()).Validate();
-
-    private static AxisTransform ParseTransform(AxisTransformMessage message) =>
-        new(message.DeadZone, message.Inverted, message.Scale);
-
-    private static InputProfileMessage ToMessage(InputProfile profile)
-    {
-        InputProfileMessage message = new()
-        {
-            SourceKind = (ContractSourceKind)profile.Key.Kind,
-            HardwareId = profile.Key.HardwareId,
-            Name = profile.Name,
-        };
-        message.DigitalBindings.AddRange(profile.DigitalBindings.Select(binding =>
-        {
-            DigitalBindingMessage result = new() { Source = binding.Source.Value };
-            result.Targets.AddRange(binding.Targets.Select(target => (ContractDigital)target));
-            return result;
-        }));
-        message.StickBindings.AddRange(profile.StickBindings.Select(binding => new StickBindingMessage
-        {
-            XSource = binding.XSource.Value,
-            YSource = binding.YSource.Value,
-            Target = (ContractStick)binding.Target,
-            XTransform = ToMessage(binding.XTransform),
-            YTransform = ToMessage(binding.YTransform),
-        }));
-        message.TriggerBindings.AddRange(profile.TriggerBindings.Select(binding => new TriggerBindingMessage
-        {
-            Source = binding.Source.Value,
-            Target = (ContractTrigger)binding.Target,
-            Transform = ToMessage(binding.Transform),
-            DigitalThreshold = binding.DigitalThreshold,
-        }));
-        return message;
-    }
-
-    private static AxisTransformMessage ToMessage(AxisTransform transform) => new()
-    {
-        DeadZone = transform.DeadZone,
-        Inverted = transform.Inverted,
-        Scale = transform.Scale,
-    };
-
     private static Screenshot ParseScreenshot(ScreenshotReply reply) => new(
         reply.Generation,
         reply.Sequence,
@@ -406,10 +332,15 @@ public sealed class GrpcConsoleSession : IConsoleSession
     {
         private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromMilliseconds(500);
         private readonly CancellationTokenSource _stop = new();
+        private readonly TaskCompletionSource<AutomationSessionEnd> _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private AsyncDuplexStreamingCall<ControlStreamRequest, ControlStreamEvent>? _call;
         private Task? _lifetime;
         private LeaseGeneration _generation;
+        private bool _disposeRequested;
         private bool _disposed;
+
+        public Task<AutomationSessionEnd> Completion => _completion.Task;
 
         public async Task StartAsync(CancellationToken cancellationToken)
         {
@@ -430,7 +361,7 @@ public sealed class GrpcConsoleSession : IConsoleSession
                     "The daemon did not grant automation control."));
             }
             _generation = new(_call.ResponseStream.Current.Granted.LeaseGeneration);
-            _lifetime = MaintainLeaseAsync(_stop.Token);
+            _lifetime = RunLifetimeAsync(_stop.Token);
         }
 
         public async Task<AutomationResult> RunAsync(
@@ -463,6 +394,7 @@ public sealed class GrpcConsoleSession : IConsoleSession
                 return;
             }
             _disposed = true;
+            _disposeRequested = true;
             _stop.Cancel();
             try
             {
@@ -477,22 +409,52 @@ public sealed class GrpcConsoleSession : IConsoleSession
             }
             _call?.Dispose();
             _stop.Dispose();
-            onReleased(this);
+            if (_lifetime is null)
+            {
+                onReleased(this);
+                _completion.TrySetResult(new(AutomationSessionEndReason.Released, null));
+            }
         }
 
-        private async Task MaintainLeaseAsync(CancellationToken cancellationToken)
+        private async Task RunLifetimeAsync(CancellationToken cancellationToken)
+        {
+            AutomationSessionEnd end;
+            try
+            {
+                end = await MaintainLeaseAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_disposeRequested)
+            {
+                end = new(AutomationSessionEndReason.Released, null);
+            }
+            catch (Exception exception)
+            {
+                end = new(AutomationSessionEndReason.ConnectionLost, exception.Message);
+            }
+            onReleased(this);
+            _completion.TrySetResult(end);
+        }
+
+        private async Task<AutomationSessionEnd> MaintainLeaseAsync(CancellationToken cancellationToken)
         {
             Task send = SendHeartbeatsAsync(cancellationToken);
-            Task receive = WatchResponsesAsync(cancellationToken);
-            await Task.WhenAny(send, receive).ConfigureAwait(false);
+            Task<AutomationSessionEnd> receive = WatchResponsesAsync(cancellationToken);
+            Task completed = await Task.WhenAny(send, receive).ConfigureAwait(false);
+            AutomationSessionEnd end = completed == receive
+                ? await receive.ConfigureAwait(false)
+                : new(AutomationSessionEndReason.ConnectionLost,
+                    "The automation heartbeat stream ended unexpectedly.");
             _stop.Cancel();
             try
             {
                 await Task.WhenAll(send, receive).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (_stop.IsCancellationRequested)
             {
             }
+            return _disposeRequested
+                ? new(AutomationSessionEndReason.Released, null)
+                : end;
         }
 
         private async Task SendHeartbeatsAsync(CancellationToken cancellationToken)
@@ -507,16 +469,30 @@ public sealed class GrpcConsoleSession : IConsoleSession
             }
         }
 
-        private async Task WatchResponsesAsync(CancellationToken cancellationToken)
+        private async Task<AutomationSessionEnd> WatchResponsesAsync(CancellationToken cancellationToken)
         {
             while (await _call!.ResponseStream.MoveNext(cancellationToken).ConfigureAwait(false))
             {
                 if (_call.ResponseStream.Current.BodyCase ==
                     ControlStreamEvent.BodyOneofCase.Condition)
                 {
-                    return;
+                    return _call.ResponseStream.Current.Condition switch
+                    {
+                        ControlCondition.LeaseRevoked => new(
+                            AutomationSessionEndReason.Preempted,
+                            "The automation control lease was revoked."),
+                        ControlCondition.BridgeUnavailable => new(
+                            AutomationSessionEndReason.BridgeUnavailable,
+                            "The controller bridge became unavailable."),
+                        _ => new(
+                            AutomationSessionEndReason.ConnectionLost,
+                            "The daemon ended automation control for an unspecified reason."),
+                    };
                 }
             }
+            return new(
+                AutomationSessionEndReason.ConnectionLost,
+                "The daemon closed the automation control stream.");
         }
 
         private static AutomationCommandMessage ToMessage(AutomationCommand command) => command switch
@@ -563,15 +539,14 @@ public sealed class GrpcConsoleSession : IConsoleSession
         Action<GrpcControlSession> onReleased) : IControlSession
     {
         private static readonly TimeSpan SendInterval = TimeSpan.FromMilliseconds(1000d / 60d);
-        private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromMilliseconds(500);
+        private static readonly TimeSpan HeartbeatInterval = ControlStateRefreshInterval;
         private readonly object _gate = new();
         private readonly CancellationTokenSource _stop = new();
         private readonly TaskCompletionSource _started =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly ControllerStateMailbox _mailbox = new();
         private TaskCompletionSource _changeSignal =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private ControllerState _desired = ControllerState.Neutral;
-        private ulong _revision;
         private TaskCompletionSource? _barrier;
         private ControlConnectionState _connectionState = ControlConnectionState.Connecting;
         private Task? _runningSupervisor;
@@ -610,13 +585,16 @@ public sealed class GrpcConsoleSession : IConsoleSession
                 {
                     return Task.CompletedTask;
                 }
-                _desired = state;
-                _revision++;
                 if (state == ControllerState.Neutral)
                 {
                     _barrier?.TrySetResult();
                     _barrier = new(TaskCreationOptions.RunContinuationsAsynchronously);
                     wait = _barrier.Task;
+                    _mailbox.PublishRequired(state);
+                }
+                else
+                {
+                    _mailbox.Publish(state);
                 }
                 signal = _changeSignal;
                 _changeSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -627,6 +605,16 @@ public sealed class GrpcConsoleSession : IConsoleSession
         }
 
         public async ValueTask DisposeAsync()
+        {
+            await DisposeCoreAsync(confirmLeaseRelease: false).ConfigureAwait(false);
+        }
+
+        public async Task AbortStartupAsync()
+        {
+            await DisposeCoreAsync(confirmLeaseRelease: true).ConfigureAwait(false);
+        }
+
+        private async Task DisposeCoreAsync(bool confirmLeaseRelease)
         {
             if (_disposed)
             {
@@ -651,7 +639,7 @@ public sealed class GrpcConsoleSession : IConsoleSession
             {
                 if (_runningSupervisor is not null)
                 {
-                    await _runningSupervisor.WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+                    await _runningSupervisor.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                 }
             }
             catch (TimeoutException)
@@ -662,6 +650,10 @@ public sealed class GrpcConsoleSession : IConsoleSession
             }
             finally
             {
+                if (confirmLeaseRelease)
+                {
+                    await ConfirmLeaseReleasedAsync().ConfigureAwait(false);
+                }
                 SetConnectionState(ControlConnectionState.Stopped);
                 lock (_gate)
                 {
@@ -673,17 +665,38 @@ public sealed class GrpcConsoleSession : IConsoleSession
             }
         }
 
+        private async Task ConfirmLeaseReleasedAsync()
+        {
+            using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(2));
+            try
+            {
+                while (!timeout.IsCancellationRequested)
+                {
+                    GetStatusReply status = await client.GetStatusAsync(
+                        new GetStatusRequest { ClientId = clientId.Value.ToString("D") },
+                        cancellationToken: timeout.Token).ConfigureAwait(false);
+                    if (status.ControlOwner != ControlOwnerMessage.ThisClient)
+                    {
+                        return;
+                    }
+                    await Task.Delay(20, timeout.Token).ConfigureAwait(false);
+                }
+            }
+            catch (Exception exception) when (exception is RpcException or OperationCanceledException)
+            {
+            }
+        }
+
         private async Task SetNeutralForShutdownAsync(CancellationToken cancellationToken)
         {
             Task wait;
             TaskCompletionSource signal;
             lock (_gate)
             {
-                _desired = ControllerState.Neutral;
-                _revision++;
                 _barrier?.TrySetResult();
                 _barrier = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 wait = _barrier.Task;
+                _mailbox.PublishRequired(ControllerState.Neutral);
                 signal = _changeSignal;
                 _changeSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
             }
@@ -710,8 +723,15 @@ public sealed class GrpcConsoleSession : IConsoleSession
                 }
                 catch (RpcException exception) when (exception.StatusCode == StatusCode.Aborted)
                 {
+                    if (!_started.Task.IsCompleted)
+                    {
+                        _started.TrySetException(new ControlConflictException(
+                            string.IsNullOrWhiteSpace(exception.Status.Detail)
+                                ? "Control is held by another interactive client."
+                                : exception.Status.Detail));
+                        break;
+                    }
                     SetConnectionState(ControlConnectionState.WaitingForControl);
-                    _started.TrySetResult();
                     await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
                     failureCount++;
                 }
@@ -759,8 +779,7 @@ public sealed class GrpcConsoleSession : IConsoleSession
 
             lock (_gate)
             {
-                _desired = ControllerState.Neutral;
-                _revision++;
+                _mailbox.Reset(ControllerState.Neutral);
             }
             await WriteStateAsync(call.RequestStream, ControllerState.Neutral, cancellationToken).ConfigureAwait(false);
             CompleteBarrier();
@@ -801,48 +820,47 @@ public sealed class GrpcConsoleSession : IConsoleSession
             IClientStreamWriter<ControlStreamRequest> writer,
             CancellationToken cancellationToken)
         {
-            ulong sentRevision;
-            lock (_gate)
-            {
-                sentRevision = _revision;
-            }
             long lastWrite = Stopwatch.GetTimestamp();
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                ControllerState desired;
-                ulong revision;
-                bool barrier;
+                bool hasPending;
+                bool nextIsNeutral;
                 Task changed;
                 lock (_gate)
                 {
-                    desired = _desired;
-                    revision = _revision;
-                    barrier = _barrier is not null;
+                    hasPending = _mailbox.HasPending;
+                    nextIsNeutral = _mailbox.NextIsNeutral;
                     changed = _changeSignal.Task;
                 }
 
                 bool heartbeatDue = Stopwatch.GetElapsedTime(lastWrite) >= HeartbeatInterval;
-                if (revision == sentRevision && !heartbeatDue)
+                if (!hasPending && !heartbeatDue)
                 {
                     TimeSpan heartbeatWait = HeartbeatInterval - Stopwatch.GetElapsedTime(lastWrite);
                     await Task.WhenAny(changed, Task.Delay(heartbeatWait, cancellationToken)).ConfigureAwait(false);
                     continue;
                 }
-                if (!barrier && !heartbeatDue)
+                if (RequiresCadenceDelay(hasPending, nextIsNeutral, heartbeatDue))
                 {
                     TimeSpan cadenceWait = SendInterval - Stopwatch.GetElapsedTime(lastWrite);
                     if (cadenceWait > TimeSpan.Zero)
                     {
-                        await Task.WhenAny(changed, Task.Delay(cadenceWait, cancellationToken)).ConfigureAwait(false);
+                        await Task.Delay(cadenceWait, cancellationToken).ConfigureAwait(false);
                         continue;
                     }
                 }
 
-                await WriteStateAsync(writer, desired, cancellationToken).ConfigureAwait(false);
-                sentRevision = revision;
+                ControllerState state;
+                lock (_gate)
+                {
+                    state = _mailbox.TryTake(out ControllerState pending)
+                        ? pending
+                        : _mailbox.Current;
+                }
+                await WriteStateAsync(writer, state, cancellationToken).ConfigureAwait(false);
                 lastWrite = Stopwatch.GetTimestamp();
-                if (barrier)
+                if (state == ControllerState.Neutral)
                 {
                     CompleteBarrier();
                 }

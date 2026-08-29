@@ -31,20 +31,19 @@ public readonly record struct CapturedHostControl(
 
 internal sealed class InputForwarder : IAsyncDisposable
 {
-    private readonly IConsoleSession _session;
     private readonly IControlSession _control;
     private readonly SdlGamepadManager _gamepads;
+    private readonly GuiConfigurationStore _configurationStore;
     private readonly Channel<Func<Task>> _commands = Channel.CreateUnbounded<Func<Task>>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly CancellationTokenSource _stop = new();
     private readonly object _snapshotGate = new();
+    private readonly ControllerStateMailbox _mailbox = new();
     private readonly HashSet<HostControlId> _pressedKeys = [];
     private readonly Dictionary<Guid, CanonicalDigitalControl> _overlays = [];
     private readonly Task _writer;
     private HostInputSnapshot _latestSnapshot = HostInputSnapshot.Empty;
-    private ulong _snapshotRevision;
-    private bool _snapshotDrainQueued;
-    private InputConfiguration _configuration;
+    private ImmutableArray<InputProfile> _profiles;
     private InputSourceOption? _selected;
     private InputProfile? _profile;
     private ControllerState _primary = ControllerState.Neutral;
@@ -52,18 +51,18 @@ internal sealed class InputForwarder : IAsyncDisposable
     private TaskCompletionSource<CapturedHostControl>? _capture;
     private HostInputSnapshot _captureBaseline = HostInputSnapshot.Empty;
     private bool _keyboardFocused;
+    private long _gamepadSelectionGeneration;
     private bool _disposed;
 
     public InputForwarder(
-        IConsoleSession session,
         IControlSession control,
         SdlGamepadManager gamepads,
-        InputConfiguration configuration)
+        GuiConfigurationStore configurationStore)
     {
-        _session = session;
         _control = control;
         _gamepads = gamepads;
-        _configuration = configuration;
+        _configurationStore = configurationStore;
+        _profiles = configurationStore.Current.Profiles;
         _gamepads.DevicesChanged += OnDevicesChanged;
         _gamepads.SnapshotChanged += OnGamepadSnapshot;
         _gamepads.SelectedDeviceDisconnected += OnGamepadDisconnected;
@@ -98,35 +97,47 @@ internal sealed class InputForwarder : IAsyncDisposable
         {
             _primary = ControllerState.Neutral;
             await SendComposedAsync().ConfigureAwait(false);
-            await _gamepads.SelectAsync(null, CancellationToken.None).ConfigureAwait(false);
+            long selectionGeneration = await _gamepads.SelectAsync(
+                null,
+                CancellationToken.None).ConfigureAwait(false);
+            Interlocked.Exchange(ref _gamepadSelectionGeneration, selectionGeneration);
             _selected = source;
-            _profile = FindProfile(source.ProfileKey);
             lock (_snapshotGate)
             {
+                _profile = FindProfile(source.ProfileKey);
                 _pressedKeys.Clear();
                 _latestSnapshot = HostInputSnapshot.Empty;
             }
+            _mailbox.Reset(ControllerState.Neutral);
 
             if (source.GamepadId is not null)
             {
-                await _gamepads.SelectAsync(source.GamepadId, CancellationToken.None).ConfigureAwait(false);
+                selectionGeneration = await _gamepads.SelectAsync(
+                    source.GamepadId,
+                    CancellationToken.None).ConfigureAwait(false);
+                Interlocked.Exchange(ref _gamepadSelectionGeneration, selectionGeneration);
             }
 
             StatusChanged?.Invoke(this, $"Input: {source.DisplayName}");
         }, cancellationToken).ConfigureAwait(false);
     }
 
-    public void SetKey(PhysicalKey key, bool pressed)
+    public bool SetKey(PhysicalKey key, bool pressed)
     {
-        if (_selected?.ProfileKey.Kind != InputSourceKind.Keyboard || !_keyboardFocused)
+        if (_selected?.ProfileKey.Kind != InputSourceKind.Keyboard)
         {
-            return;
+            return false;
         }
 
         HostControlId id = DefaultInputProfiles.KeyboardId(key);
         if (pressed && TryCompleteCapture(new(id, CapturedHostControlKind.Digital)))
         {
-            return;
+            return true;
+        }
+
+        if (!_keyboardFocused)
+        {
+            return false;
         }
 
         HostInputSnapshot? snapshot = null;
@@ -144,6 +155,7 @@ internal sealed class InputForwarder : IAsyncDisposable
         {
             QueueSnapshot(snapshot);
         }
+        return true;
     }
 
     public Task SetKeyboardFocusAsync(bool focused, CancellationToken cancellationToken) =>
@@ -157,6 +169,7 @@ internal sealed class InputForwarder : IAsyncDisposable
                     _pressedKeys.Clear();
                     _latestSnapshot = HostInputSnapshot.Empty;
                 }
+                _mailbox.Reset(ControllerState.Neutral);
                 _primary = ControllerState.Neutral;
                 await SendComposedAsync().ConfigureAwait(false);
             }
@@ -179,6 +192,7 @@ internal sealed class InputForwarder : IAsyncDisposable
 
         await EnqueueAndWaitAsync(async () =>
         {
+            _mailbox.Reset(ControllerState.Neutral);
             _primary = ControllerState.Neutral;
             await SendComposedAsync().ConfigureAwait(false);
         }, cancellationToken).ConfigureAwait(false);
@@ -222,25 +236,41 @@ internal sealed class InputForwarder : IAsyncDisposable
         }
     }
 
+    public Task SetOverlayAsync(
+        Guid id,
+        CanonicalDigitalControl control,
+        bool pressed,
+        CancellationToken cancellationToken) => EnqueueAndWaitAsync(async () =>
+        {
+            if (pressed)
+            {
+                _overlays[id] = control;
+            }
+            else
+            {
+                _overlays.Remove(id);
+            }
+            await SendComposedAsync().ConfigureAwait(false);
+        }, cancellationToken);
+
     public async Task SaveAndActivateProfileAsync(InputProfile profile, CancellationToken cancellationToken)
     {
-        InputConfiguration saved = await _session.SaveInputProfileAsync(
-            profile,
-            _configuration.Revision,
-            cancellationToken).ConfigureAwait(false);
+        GuiConfiguration saved = await _configurationStore.SaveProfileAsync(
+            profile, cancellationToken).ConfigureAwait(false);
         await EnqueueAndWaitAsync(async () =>
         {
-            _configuration = saved;
+            _profiles = saved.Profiles;
             if (_selected?.ProfileKey == profile.Key)
             {
-                _profile = profile;
                 HostInputSnapshot snapshot;
                 lock (_snapshotGate)
                 {
+                    _profile = profile;
                     snapshot = _latestSnapshot;
                 }
 
                 _primary = InputMapper.Map(profile, snapshot);
+                _mailbox.Reset(_primary);
                 await SendComposedAsync().ConfigureAwait(false);
             }
         }, cancellationToken).ConfigureAwait(false);
@@ -256,6 +286,7 @@ internal sealed class InputForwarder : IAsyncDisposable
         _disposed = true;
         await EnqueueAndWaitAsync(async () =>
         {
+            _mailbox.Reset(ControllerState.Neutral);
             _primary = ControllerState.Neutral;
             _overlays.Clear();
             await SendComposedAsync().ConfigureAwait(false);
@@ -271,7 +302,7 @@ internal sealed class InputForwarder : IAsyncDisposable
     }
 
     private InputProfile FindProfile(InputProfileKey key) =>
-        _configuration.Profiles.FirstOrDefault(profile => profile.Key == key)
+        _profiles.FirstOrDefault(profile => profile.Key == key)
         ?? DefaultInputProfiles.For(key);
 
     private void OnDevicesChanged(object? sender, EventArgs eventArgs) =>
@@ -279,7 +310,10 @@ internal sealed class InputForwarder : IAsyncDisposable
 
     private void OnGamepadSnapshot(object? sender, GamepadSnapshot snapshot)
     {
-        if (_selected?.GamepadId == snapshot.Device)
+        if (IsCurrentGamepadSnapshot(
+            _selected,
+            Interlocked.Read(ref _gamepadSelectionGeneration),
+            snapshot))
         {
             CapturedHostControl? captured = null;
             lock (_snapshotGate)
@@ -323,6 +357,13 @@ internal sealed class InputForwarder : IAsyncDisposable
         }
     }
 
+    internal static bool IsCurrentGamepadSnapshot(
+        InputSourceOption? selected,
+        long selectionGeneration,
+        GamepadSnapshot snapshot) =>
+        selected?.GamepadId == snapshot.Device &&
+        selectionGeneration == snapshot.SelectionGeneration;
+
     private bool TryCompleteCapture(CapturedHostControl control)
     {
         TaskCompletionSource<CapturedHostControl>? capture;
@@ -344,8 +385,8 @@ internal sealed class InputForwarder : IAsyncDisposable
                 lock (_snapshotGate)
                 {
                     _latestSnapshot = HostInputSnapshot.Empty;
-                    _snapshotRevision++;
                 }
+                _mailbox.Reset(ControllerState.Neutral);
                 _primary = ControllerState.Neutral;
                 _overlays.Clear();
                 await SendComposedAsync().ConfigureAwait(false);
@@ -370,8 +411,8 @@ internal sealed class InputForwarder : IAsyncDisposable
                 {
                     _pressedKeys.Clear();
                     _latestSnapshot = HostInputSnapshot.Empty;
-                    _snapshotRevision++;
                 }
+                _mailbox.Reset(ControllerState.Neutral);
                 _primary = ControllerState.Neutral;
                 _lastSent = ControllerState.Neutral;
                 _overlays.Clear();
@@ -392,57 +433,38 @@ internal sealed class InputForwarder : IAsyncDisposable
 
     private void QueueSnapshot(HostInputSnapshot snapshot)
     {
-        bool enqueue;
+        ControllerState? mapped = null;
         lock (_snapshotGate)
         {
             _latestSnapshot = snapshot;
-            _snapshotRevision++;
-            enqueue = !_snapshotDrainQueued;
-            _snapshotDrainQueued = true;
+            if (_profile is not null)
+            {
+                mapped = InputMapper.Map(_profile, snapshot);
+            }
         }
 
-        if (enqueue)
+        if (mapped is { } state && _mailbox.Publish(state))
         {
-            _commands.Writer.TryWrite(DrainLatestSnapshotAsync);
+            _commands.Writer.TryWrite(DrainSnapshotsAsync);
         }
     }
 
-    private async Task DrainLatestSnapshotAsync()
+    private async Task DrainSnapshotsAsync()
     {
-        while (true)
+        while (_mailbox.TryTake(out ControllerState mapped))
         {
-            HostInputSnapshot snapshot;
-            ulong revision;
-            lock (_snapshotGate)
+            if (mapped != _primary)
             {
-                snapshot = _latestSnapshot;
-                revision = _snapshotRevision;
-            }
-
-            if (_profile is not null)
-            {
-                ControllerState mapped = InputMapper.Map(_profile, snapshot);
-                if (mapped != _primary)
-                {
-                    _primary = mapped;
-                    await SendComposedAsync().ConfigureAwait(false);
-                }
-            }
-
-            lock (_snapshotGate)
-            {
-                if (_snapshotRevision == revision)
-                {
-                    _snapshotDrainQueued = false;
-                    return;
-                }
+                _primary = mapped;
+                await SendComposedAsync().ConfigureAwait(false);
             }
         }
     }
 
     private async Task SendComposedAsync()
     {
-        ControllerState state = Compose(_primary, _overlays.Values);
+        ControllerState state = ControllerStateComposer.AddDigitalControls(
+            _primary, _overlays.Values);
         if (state == _lastSent)
         {
             return;
@@ -451,64 +473,6 @@ internal sealed class InputForwarder : IAsyncDisposable
         await _control.SetStateAsync(state, _stop.Token).ConfigureAwait(false);
         _lastSent = state;
     }
-
-    private static ControllerState Compose(
-        ControllerState primary,
-        IEnumerable<CanonicalDigitalControl> overlays)
-    {
-        GameButtons buttons = primary.Buttons;
-        HashSet<CanonicalDigitalControl> directions = HatToDirections(primary.DPad);
-        foreach (CanonicalDigitalControl control in overlays)
-        {
-            buttons |= ToButton(control);
-            if (control is >= CanonicalDigitalControl.DPadUp and <= CanonicalDigitalControl.DPadLeft)
-            {
-                directions.Add(control);
-            }
-        }
-
-        HostInputSnapshot directionSnapshot = new(
-            directions.Select(direction => new HostControlId(direction.ToString())).ToImmutableHashSet(),
-            ImmutableDictionary<HostControlId, float>.Empty);
-        InputProfile directionProfile = new(
-            new(InputSourceKind.Keyboard, "overlay"),
-            "overlay",
-            directions.Select(direction => new DigitalBinding(
-                new(direction.ToString()), [direction])).ToImmutableArray(),
-            [], []);
-        HatPosition dpad = InputMapper.Map(directionProfile, directionSnapshot).DPad;
-        return primary with { Buttons = buttons, DPad = dpad };
-    }
-
-    private static HashSet<CanonicalDigitalControl> HatToDirections(HatPosition hat) => hat switch
-    {
-        HatPosition.Up => [CanonicalDigitalControl.DPadUp],
-        HatPosition.UpRight => [CanonicalDigitalControl.DPadUp, CanonicalDigitalControl.DPadRight],
-        HatPosition.Right => [CanonicalDigitalControl.DPadRight],
-        HatPosition.DownRight => [CanonicalDigitalControl.DPadDown, CanonicalDigitalControl.DPadRight],
-        HatPosition.Down => [CanonicalDigitalControl.DPadDown],
-        HatPosition.DownLeft => [CanonicalDigitalControl.DPadDown, CanonicalDigitalControl.DPadLeft],
-        HatPosition.Left => [CanonicalDigitalControl.DPadLeft],
-        HatPosition.UpLeft => [CanonicalDigitalControl.DPadUp, CanonicalDigitalControl.DPadLeft],
-        _ => [],
-    };
-
-    private static GameButtons ToButton(CanonicalDigitalControl control) => control switch
-    {
-        CanonicalDigitalControl.A => GameButtons.A,
-        CanonicalDigitalControl.B => GameButtons.B,
-        CanonicalDigitalControl.X => GameButtons.X,
-        CanonicalDigitalControl.Y => GameButtons.Y,
-        CanonicalDigitalControl.LeftShoulder => GameButtons.LeftShoulder,
-        CanonicalDigitalControl.RightShoulder => GameButtons.RightShoulder,
-        CanonicalDigitalControl.LeftTrigger => GameButtons.LeftTrigger,
-        CanonicalDigitalControl.RightTrigger => GameButtons.RightTrigger,
-        CanonicalDigitalControl.Minus => GameButtons.Minus,
-        CanonicalDigitalControl.Plus => GameButtons.Plus,
-        CanonicalDigitalControl.Home => GameButtons.Home,
-        CanonicalDigitalControl.Capture => GameButtons.Capture,
-        _ => GameButtons.None,
-    };
 
     private Task EnqueueAndWaitAsync(Func<Task> command, CancellationToken cancellationToken)
     {
@@ -537,7 +501,14 @@ internal sealed class InputForwarder : IAsyncDisposable
     {
         await foreach (Func<Task> command in _commands.Reader.ReadAllAsync(_stop.Token).ConfigureAwait(false))
         {
-            await command().ConfigureAwait(false);
+            try
+            {
+                await command().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                StatusChanged?.Invoke(this, $"Input failed: {exception.Message}");
+            }
         }
     }
 }

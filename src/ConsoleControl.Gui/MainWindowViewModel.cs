@@ -16,6 +16,7 @@ namespace ConsoleControl.Gui;
 public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposable
 {
     private readonly IConsoleSession _session;
+    private readonly GuiConfigurationStore _configuration;
     private IControlSession? _control;
     private InputForwarder? _forwarder;
     private InputSourceOption? _selectedInputSource;
@@ -27,17 +28,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private bool _loadingVideoSources;
     private bool _loadingControllerBridges;
     private ulong _controllerBridgeRevision;
-    private InputConfiguration? _inputConfiguration;
     private PendingControlRequest? _pendingControlRequest;
     private readonly CancellationTokenSource _statusStop = new();
     private Task? _statusTask;
     private string _videoStatusText = "Finding video sources...";
     private string _statusText = "Connecting to daemon...";
+    private bool _keyboardFocused;
+    private InputProfileKey? _preferredInputProfile;
+    private long _inputSelectionGeneration;
     private bool _disposed;
 
-    public MainWindowViewModel(IConsoleSession session)
+    internal MainWindowViewModel(IConsoleSession session, GuiConfigurationStore configuration)
     {
         _session = session;
+        _configuration = configuration;
+        _preferredInputProfile = configuration.Current.LastInputSource;
         PulseControlCommand = new AsyncCommand<CanonicalDigitalControl>(PulseControlAsync);
         ToggleControlCommand = new AsyncCommand(ToggleControlAsync);
         DeclineControlRequestCommand = new AsyncCommand(DeclineControlRequestAsync);
@@ -70,10 +75,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             }
 
             _selectedInputSource = value;
+            _preferredInputProfile = value?.ProfileKey;
             OnPropertyChanged();
             if (value is not null && _forwarder is not null)
             {
-                _ = SelectInputSourceAsync(value);
+                long generation = Interlocked.Increment(ref _inputSelectionGeneration);
+                _ = SelectInputSourceAndPersistAsync(value, generation);
             }
         }
     }
@@ -162,12 +169,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         try
         {
             ConsoleStatus status = await _session.GetStatusAsync(CancellationToken.None);
-            _inputConfiguration = await _session.GetInputConfigurationAsync(CancellationToken.None);
-            StatusText = status.ControlOwner == ControlOwner.None
-                ? "Observing. Choose Take Control to send input."
-                : "Another client has control. Choose Take Control to preempt automation.";
             ApplyPendingControlRequest(status.PendingControlRequest);
             _statusTask = MonitorStatusAsync(_statusStop.Token);
+            if (status.ControlOwner == ControlOwner.None)
+            {
+                await TakeControlAsync();
+            }
+            else
+            {
+                StatusText = "Another client has control. Choose Take Control to preempt automation.";
+            }
         }
         catch (Exception exception)
         {
@@ -219,18 +230,58 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         await _session.DisposeAsync();
     }
 
-    public void SetKey(PhysicalKey key, bool pressed)
+    public bool SetKey(PhysicalKey key, bool pressed)
     {
-        if (!_disposed)
+        if (_disposed)
         {
-            _forwarder?.SetKey(key, pressed);
+            return false;
+        }
+        return _forwarder?.SetKey(key, pressed) == true;
+    }
+
+    public Task SetKeyboardFocusAsync(bool focused)
+    {
+        _keyboardFocused = focused;
+        return !_disposed
+            ? _forwarder?.SetKeyboardFocusAsync(focused, CancellationToken.None) ?? Task.CompletedTask
+            : Task.CompletedTask;
+    }
+
+    internal async Task RememberWindowAsync(GuiWindowState window)
+    {
+        try
+        {
+            await _configuration.RememberWindowAsync(window, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"Window state was not saved: {exception.Message}";
         }
     }
 
-    public Task SetKeyboardFocusAsync(bool focused) =>
-        !_disposed
-            ? _forwarder?.SetKeyboardFocusAsync(focused, CancellationToken.None) ?? Task.CompletedTask
-            : Task.CompletedTask;
+    public async Task SetOnScreenControlAsync(
+        Guid holdId,
+        CanonicalDigitalControl control,
+        bool pressed)
+    {
+        if (_disposed || _forwarder is null || _control is null)
+        {
+            return;
+        }
+        try
+        {
+            await _forwarder.SetOverlayAsync(
+                holdId,
+                control,
+                pressed,
+                CancellationToken.None);
+            StatusText = pressed ? $"{GetLabel(control)} held" : "Ready";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"Input failed: {exception.Message}";
+        }
+    }
 
     private async Task PulseControlAsync(CanonicalDigitalControl control)
     {
@@ -278,17 +329,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             _control = await _session.TakeControlAsync(
                 ControlPriority.InteractiveUser,
                 CancellationToken.None);
-            _inputConfiguration ??=
-                await _session.GetInputConfigurationAsync(CancellationToken.None);
             _forwarder = new(
-                _session,
                 _control,
                 new SdlGamepadManager(),
-                _inputConfiguration);
+                _configuration);
             _forwarder.SourcesChanged += OnSourcesChanged;
             _forwarder.StatusChanged += OnForwardingStatusChanged;
-            RefreshInputSources();
-            SelectedInputSource = InputSources.FirstOrDefault();
+            RefreshInputSources(activateSelection: false);
+            if (SelectedInputSource is { } source)
+            {
+                await _forwarder.SelectSourceAsync(source, CancellationToken.None);
+            }
+            await _forwarder.SetKeyboardFocusAsync(_keyboardFocused, CancellationToken.None);
             StatusText = FormatConnectionState(_control.ConnectionState);
         }
         catch (Exception exception)
@@ -394,6 +446,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         CanonicalDigitalControl.DPadRight => "D-pad right",
         CanonicalDigitalControl.DPadDown => "D-pad down",
         CanonicalDigitalControl.DPadLeft => "D-pad left",
+        CanonicalDigitalControl.LeftStickClick => "L3",
+        CanonicalDigitalControl.RightStickClick => "R3",
         _ => control.ToString(),
     };
 
@@ -406,6 +460,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         catch (Exception exception)
         {
             StatusText = $"Input selection failed: {exception.Message}";
+        }
+    }
+
+    private async Task SelectInputSourceAndPersistAsync(InputSourceOption source, long generation)
+    {
+        await SelectInputSourceAsync(source);
+        if (generation != Interlocked.Read(ref _inputSelectionGeneration))
+        {
+            return;
+        }
+        try
+        {
+            await _configuration.RememberInputSourceAsync(source.ProfileKey, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"Input selected, but its preference was not saved: {exception.Message}";
         }
     }
 
@@ -528,7 +599,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 
     private void OnSourcesChanged(object? sender, EventArgs eventArgs) =>
-        Dispatcher.UIThread.Post(RefreshInputSources);
+        Dispatcher.UIThread.Post(() => RefreshInputSources());
 
     private void OnForwardingStatusChanged(object? sender, string status) =>
         Dispatcher.UIThread.Post(() => StatusText = status);
@@ -543,18 +614,36 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         _ => "Connecting to daemon...",
     };
 
-    private void RefreshInputSources()
+    private void RefreshInputSources(bool activateSelection = true)
     {
-        string? selectedId = SelectedInputSource?.Id;
+        InputSourceOption? current = SelectedInputSource;
         InputSources.Clear();
         foreach (InputSourceOption source in _forwarder?.Sources ?? [])
         {
             InputSources.Add(source);
         }
 
-        _selectedInputSource = InputSources.FirstOrDefault(source => source.Id == selectedId)
-            ?? InputSources.FirstOrDefault();
+        _selectedInputSource = ChooseInputSource(InputSources, current, _preferredInputProfile);
         OnPropertyChanged(nameof(SelectedInputSource));
+        if (activateSelection && _selectedInputSource is { } selected && selected != current)
+        {
+            _ = SelectInputSourceAsync(selected);
+        }
+    }
+
+    internal static InputSourceOption? ChooseInputSource(
+        IEnumerable<InputSourceOption> sources,
+        InputSourceOption? current,
+        InputProfileKey? preferred)
+    {
+        InputSourceOption[] available = sources.ToArray();
+        return preferred is { } key
+            ? available.FirstOrDefault(source => source.ProfileKey == key)
+                ?? available.FirstOrDefault(source => source.Id == current?.Id)
+                ?? available.FirstOrDefault(source => source.ProfileKey == InputProfileKey.Keyboard)
+            : available.FirstOrDefault(source => source.Id == current?.Id)
+                ?? available.FirstOrDefault(source => source.ProfileKey == InputProfileKey.Keyboard)
+                ?? available.FirstOrDefault();
     }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>

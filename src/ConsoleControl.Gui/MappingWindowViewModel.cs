@@ -53,7 +53,7 @@ public sealed class MappingWindowViewModel : INotifyPropertyChanged
         }
     }
 
-    public void HandleKey(PhysicalKey key) => _forwarder.SetKey(key, true);
+    public bool HandleKey(PhysicalKey key) => _forwarder.SetKey(key, true);
 
     public void CancelCapture() => _captureStop.Cancel();
 
@@ -267,6 +267,8 @@ public sealed class MappingWindowViewModel : INotifyPropertyChanged
         CanonicalDigitalControl.RightShoulder => "R",
         CanonicalDigitalControl.LeftTrigger => "ZL",
         CanonicalDigitalControl.RightTrigger => "ZR",
+        CanonicalDigitalControl.LeftStickClick => "L3",
+        CanonicalDigitalControl.RightStickClick => "R3",
         CanonicalDigitalControl.DPadUp => "D-pad up",
         CanonicalDigitalControl.DPadRight => "D-pad right",
         CanonicalDigitalControl.DPadDown => "D-pad down",

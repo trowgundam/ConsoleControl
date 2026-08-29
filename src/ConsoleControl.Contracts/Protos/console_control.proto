@@ -7,8 +7,6 @@ package consolecontrol.v1;
 service ConsoleControlService {
   rpc GetStatus (GetStatusRequest) returns (GetStatusReply);
   rpc Control (stream ControlStreamRequest) returns (stream ControlStreamEvent);
-  rpc GetInputConfiguration (GetInputConfigurationRequest) returns (InputConfigurationReply);
-  rpc SaveInputProfile (SaveInputProfileRequest) returns (InputConfigurationReply);
   rpc GetVideoInventory (GetVideoInventoryRequest) returns (VideoInventoryReply);
   rpc SelectVideoSource (SelectVideoSourceRequest) returns (VideoSelectionReply);
   rpc GetControllerBridgeInventory (GetControllerBridgeInventoryRequest) returns (ControllerBridgeInventoryReply);
@@ -259,59 +257,6 @@ enum ControlCondition {
   CONTROL_CONDITION_LEASE_REVOKED = 2;
 }
 
-message GetInputConfigurationRequest {}
-
-message SaveInputProfileRequest {
-  uint64 expected_revision = 1;
-  InputProfileMessage profile = 2;
-}
-
-message InputConfigurationReply {
-  uint64 revision = 1;
-  repeated InputProfileMessage profiles = 2;
-}
-
-message InputProfileMessage {
-  InputSourceKind source_kind = 1;
-  string hardware_id = 2;
-  string name = 3;
-  repeated DigitalBindingMessage digital_bindings = 4;
-  repeated StickBindingMessage stick_bindings = 5;
-  repeated TriggerBindingMessage trigger_bindings = 6;
-}
-
-message DigitalBindingMessage {
-  string source = 1;
-  repeated CanonicalDigitalControl targets = 2;
-}
-
-message StickBindingMessage {
-  string x_source = 1;
-  string y_source = 2;
-  CanonicalStick target = 3;
-  AxisTransformMessage x_transform = 4;
-  AxisTransformMessage y_transform = 5;
-}
-
-message TriggerBindingMessage {
-  string source = 1;
-  CanonicalTrigger target = 2;
-  AxisTransformMessage transform = 3;
-  float digital_threshold = 4;
-}
-
-message AxisTransformMessage {
-  float dead_zone = 1;
-  bool inverted = 2;
-  float scale = 3;
-}
-
-enum InputSourceKind {
-  INPUT_SOURCE_KIND_UNSPECIFIED = 0;
-  INPUT_SOURCE_KIND_KEYBOARD = 1;
-  INPUT_SOURCE_KIND_GAMEPAD = 2;
-}
-
 enum CanonicalDigitalControl {
   CANONICAL_DIGITAL_CONTROL_UNSPECIFIED = 0;
   CANONICAL_DIGITAL_CONTROL_A = 1;
@@ -330,18 +275,8 @@ enum CanonicalDigitalControl {
   CANONICAL_DIGITAL_CONTROL_DPAD_RIGHT = 14;
   CANONICAL_DIGITAL_CONTROL_DPAD_DOWN = 15;
   CANONICAL_DIGITAL_CONTROL_DPAD_LEFT = 16;
-}
-
-enum CanonicalStick {
-  CANONICAL_STICK_UNSPECIFIED = 0;
-  CANONICAL_STICK_LEFT = 1;
-  CANONICAL_STICK_RIGHT = 2;
-}
-
-enum CanonicalTrigger {
-  CANONICAL_TRIGGER_UNSPECIFIED = 0;
-  CANONICAL_TRIGGER_LEFT = 1;
-  CANONICAL_TRIGGER_RIGHT = 2;
+  CANONICAL_DIGITAL_CONTROL_LEFT_STICK_CLICK = 17;
+  CANONICAL_DIGITAL_CONTROL_RIGHT_STICK_CLICK = 18;
 }
 
 enum ControlPriority {

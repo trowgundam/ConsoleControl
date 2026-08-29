@@ -9,6 +9,7 @@ internal sealed class AutomationRuntime(
     IScreenshotSource video,
     TimeProvider timeProvider)
 {
+    private static readonly TimeSpan StateRefreshInterval = TimeSpan.FromMilliseconds(50);
     private int _running;
 
     public async Task<AutomationResult> ExecuteAsync(
@@ -55,7 +56,8 @@ internal sealed class AutomationRuntime(
                      plan.Events.Where(item => item.Kind != AutomationEventKind.EndCapture)
                          .GroupBy(item => item.Offset))
             {
-                await DelayUntilAsync(startedAt, group.Key, token).ConfigureAwait(false);
+                await DelayUntilAsync(
+                    startedAt, group.Key, client, generation, active, token).ConfigureAwait(false);
 
                 foreach (AutomationEvent item in group.Where(item =>
                              item.Kind == AutomationEventKind.StartCapture))
@@ -99,7 +101,8 @@ internal sealed class AutomationRuntime(
                 }
             }
 
-            await DelayUntilAsync(startedAt, plan.CompletionAt, token).ConfigureAwait(false);
+            await DelayUntilAsync(
+                startedAt, plan.CompletionAt, client, generation, active, token).ConfigureAwait(false);
             await controls.SetControllerStateAsync(
                 client, generation, ControllerState.Neutral, token).ConfigureAwait(false);
 
@@ -167,12 +170,28 @@ internal sealed class AutomationRuntime(
     private async Task DelayUntilAsync(
         long startedAt,
         TimeSpan offset,
+        ClientId client,
+        LeaseGeneration generation,
+        Dictionary<CanonicalDigitalControl, int> active,
         CancellationToken cancellationToken)
     {
-        TimeSpan remaining = offset - timeProvider.GetElapsedTime(startedAt);
-        if (remaining > TimeSpan.Zero)
+        while (true)
         {
-            await Task.Delay(remaining, timeProvider, cancellationToken).ConfigureAwait(false);
+            TimeSpan remaining = offset - timeProvider.GetElapsedTime(startedAt);
+            if (remaining <= TimeSpan.Zero)
+            {
+                return;
+            }
+
+            await Task.Delay(
+                remaining < StateRefreshInterval ? remaining : StateRefreshInterval,
+                timeProvider,
+                cancellationToken).ConfigureAwait(false);
+            if (active.Count != 0 && offset - timeProvider.GetElapsedTime(startedAt) > TimeSpan.Zero)
+            {
+                await controls.SetControllerStateAsync(
+                    client, generation, Compose(active), cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -213,46 +232,7 @@ internal sealed class AutomationRuntime(
     }
 
     private static ControllerState Compose(Dictionary<CanonicalDigitalControl, int> active)
-    {
-        GameButtons buttons = GameButtons.None;
-        foreach (CanonicalDigitalControl control in active.Keys)
-        {
-            buttons |= control switch
-            {
-                CanonicalDigitalControl.A => GameButtons.A,
-                CanonicalDigitalControl.B => GameButtons.B,
-                CanonicalDigitalControl.X => GameButtons.X,
-                CanonicalDigitalControl.Y => GameButtons.Y,
-                CanonicalDigitalControl.LeftShoulder => GameButtons.LeftShoulder,
-                CanonicalDigitalControl.RightShoulder => GameButtons.RightShoulder,
-                CanonicalDigitalControl.LeftTrigger => GameButtons.LeftTrigger,
-                CanonicalDigitalControl.RightTrigger => GameButtons.RightTrigger,
-                CanonicalDigitalControl.Minus => GameButtons.Minus,
-                CanonicalDigitalControl.Plus => GameButtons.Plus,
-                CanonicalDigitalControl.Home => GameButtons.Home,
-                CanonicalDigitalControl.Capture => GameButtons.Capture,
-                _ => GameButtons.None,
-            };
-        }
-
-        int vertical = (active.ContainsKey(CanonicalDigitalControl.DPadDown) ? 1 : 0) -
-                       (active.ContainsKey(CanonicalDigitalControl.DPadUp) ? 1 : 0);
-        int horizontal = (active.ContainsKey(CanonicalDigitalControl.DPadRight) ? 1 : 0) -
-                         (active.ContainsKey(CanonicalDigitalControl.DPadLeft) ? 1 : 0);
-        HatPosition dpad = (horizontal, vertical) switch
-        {
-            (0, -1) => HatPosition.Up,
-            (1, -1) => HatPosition.UpRight,
-            (1, 0) => HatPosition.Right,
-            (1, 1) => HatPosition.DownRight,
-            (0, 1) => HatPosition.Down,
-            (-1, 1) => HatPosition.DownLeft,
-            (-1, 0) => HatPosition.Left,
-            (-1, -1) => HatPosition.UpLeft,
-            _ => HatPosition.Neutral,
-        };
-        return ControllerState.Neutral with { Buttons = buttons, DPad = dpad };
-    }
+        => ControllerStateComposer.FromDigitalControls(active.Keys);
 }
 
 internal sealed class AutomationBusyException(string message) : Exception(message);

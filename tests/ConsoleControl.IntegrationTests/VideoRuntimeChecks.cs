@@ -26,13 +26,42 @@ internal static class VideoRuntimeChecks
             int enumerationsAfterInitialization = adapter.EnumerationCount;
             VideoCaptureStatus cachedStatus = runtime.GetStatus();
             Require(adapter.EnumerationCount == enumerationsAfterInitialization
-                && cachedStatus.SelectedSourceId == first.Id,
+                && cachedStatus.SelectedSourceId is null
+                && cachedStatus.CaptureState == VideoCaptureState.SelectionRequired,
                 "cached video status unexpectedly enumerated capture hardware");
             VideoInventory initial = await runtime.GetInventoryAsync(CancellationToken.None);
-            Require(initial.SelectedSourceId == first.Id && initial.Revision == 1,
-                "video initialization did not select and persist the first source");
+            Require(initial.SelectedSourceId is null && initial.Revision == 0 && adapter.OpenCount == 0,
+                "video initialization silently selected a capture source");
 
-            await WaitUntilAsync(() => adapter.OpenCount >= 1, TimeSpan.FromSeconds(1));
+            FakeVideoAdapter failedAdapter = new([first]);
+            await using VideoRuntime failedRuntime = new(
+                failedAdapter,
+                new FailingVideoSelectionStore(),
+                new VideoStreamAddress(new Uri("http://127.0.0.1:5042/video/live.mjpeg")));
+            try
+            {
+                await failedRuntime.SelectAsync(first.Id, 0, CancellationToken.None);
+                throw new InvalidOperationException("a failed video persistence write was ignored");
+            }
+            catch (IOException)
+            {
+            }
+            VideoInventory afterFailedWrite = await failedRuntime.GetInventoryAsync(CancellationToken.None);
+            Require(afterFailedWrite.SelectedSourceId is null
+                && afterFailedWrite.Revision == 0
+                && failedAdapter.OpenCount == 0,
+                "a failed persistence write changed the live video selection");
+
+            VideoSelection firstSelection = await runtime.SelectAsync(
+                first.Id,
+                initial.Revision,
+                CancellationToken.None);
+            Require(firstSelection.SourceId == first.Id && firstSelection.Revision == 1,
+                "explicit video selection did not persist the selected source");
+
+            await WaitUntilAsync(
+                () => adapter.OpenCount >= 1 && adapter.Current is not null,
+                TimeSpan.FromSeconds(1));
             FakeVideoSession session = adapter.Current!;
             VideoFrameSubscription subscription = runtime.Subscribe();
             await session.WriteAsync([0xFF, 0xD8, 0x01, 0xFF, 0xD9]);
@@ -61,7 +90,10 @@ internal static class VideoRuntimeChecks
             {
             }
             adapter.Available = true;
-            await WaitUntilAsync(() => adapter.OpenCount >= 2, TimeSpan.FromSeconds(2));
+            await WaitUntilAsync(
+                () => adapter.OpenCount >= 2 && adapter.Current is not null &&
+                    !ReferenceEquals(adapter.Current, session),
+                TimeSpan.FromSeconds(2));
             VideoFrameSubscription replacementSubscription = runtime.Subscribe();
             await adapter.Current!.WriteAsync([0xFF, 0xD8, 0x04, 0xFF, 0xD9]);
             EncodedVideoFrame recovered = await replacementSubscription.WaitForNextAsync(
@@ -71,18 +103,39 @@ internal static class VideoRuntimeChecks
 
             VideoSelection selected = await runtime.SelectAsync(
                 second.Id,
-                initial.Revision,
+                firstSelection.Revision,
                 CancellationToken.None);
             Require(selected.SourceId == second.Id && selected.Revision == 2,
                 "video source selection did not advance its revision");
             try
             {
-                await runtime.SelectAsync(first.Id, initial.Revision, CancellationToken.None);
+                await runtime.SelectAsync(first.Id, firstSelection.Revision, CancellationToken.None);
                 throw new InvalidOperationException("a stale video source revision was accepted");
             }
             catch (VideoSelectionConflictException)
             {
             }
+            FakeVideoAdapter missingAdapter = new([first]);
+            await using VideoRuntime missingRuntime = new(
+                missingAdapter,
+                new VideoSelectionStore(selectionPath),
+                new VideoStreamAddress(new Uri("http://127.0.0.1:5042/video/live.mjpeg")));
+            await missingRuntime.InitializeAsync(CancellationToken.None);
+            VideoInventory missing = await missingRuntime.GetInventoryAsync(CancellationToken.None);
+            Require(missing.SelectedSourceId == second.Id
+                && missing.Revision == 2
+                && missingAdapter.OpenCount == 0,
+                "video initialization replaced an unavailable persisted source");
+
+            missingAdapter.SetSources([first, second]);
+            await WaitUntilAsync(
+                () => missingAdapter.OpenCount >= 1 && missingAdapter.LastOpened?.Id == second.Id,
+                TimeSpan.FromSeconds(2));
+            Require(missingAdapter.LastOpened?.Id == second.Id,
+                "video recovery did not wait for the exact persisted source");
+            VideoInventory recoveredInventory = await missingRuntime.GetInventoryAsync(CancellationToken.None);
+            Require(recoveredInventory.SelectedSourceId == second.Id && recoveredInventory.Revision == 2,
+                "video recovery changed the persisted selection");
         }
         finally
         {
@@ -139,7 +192,10 @@ internal static class VideoRuntimeChecks
 
     private sealed class FakeVideoAdapter(ImmutableArray<VideoSource> sources) : IVideoCaptureAdapter
     {
+        private ImmutableArray<VideoSource> _sources = sources;
+
         public FakeVideoSession? Current { get; private set; }
+        public VideoSource? LastOpened { get; private set; }
         public bool Available { get; set; } = true;
         public int OpenCount { get; private set; }
         public int EnumerationCount { get; private set; }
@@ -147,8 +203,10 @@ internal static class VideoRuntimeChecks
         public Task<ImmutableArray<VideoSource>> GetSourcesAsync(CancellationToken cancellationToken)
         {
             EnumerationCount++;
-            return Task.FromResult(sources);
+            return Task.FromResult(_sources);
         }
+
+        public void SetSources(ImmutableArray<VideoSource> value) => _sources = value;
 
         public Task<IVideoCaptureSession> OpenAsync(
             VideoSource source,
@@ -159,6 +217,7 @@ internal static class VideoRuntimeChecks
                 throw new IOException("The fake capture source is disconnected.");
             }
             OpenCount++;
+            LastOpened = source;
             Current = new();
             return Task.FromResult<IVideoCaptureSession>(Current);
         }
@@ -180,5 +239,16 @@ internal static class VideoRuntimeChecks
             _frames.Writer.TryComplete();
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class FailingVideoSelectionStore : IVideoSelectionStore
+    {
+        public Task<(VideoSourceId? SourceId, ulong Revision)> ReadAsync(
+            CancellationToken cancellationToken) => Task.FromResult<(VideoSourceId?, ulong)>((null, 0));
+
+        public Task WriteAsync(
+            VideoSourceId sourceId,
+            ulong revision,
+            CancellationToken cancellationToken) => throw new IOException("write failed");
     }
 }

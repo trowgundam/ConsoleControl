@@ -38,6 +38,8 @@ public enum CanonicalDigitalControl
     DPadRight,
     DPadDown,
     DPadLeft,
+    LeftStickClick,
+    RightStickClick,
 }
 
 public enum CanonicalStick
@@ -164,10 +166,6 @@ public sealed record InputProfile(
     }
 }
 
-public sealed record InputConfiguration(
-    ulong Revision,
-    ImmutableArray<InputProfile> Profiles);
-
 public sealed record HostInputSnapshot(
     ImmutableHashSet<HostControlId> Pressed,
     ImmutableDictionary<HostControlId, float> Axes)
@@ -229,13 +227,13 @@ public static class InputMapper
             }
         }
 
-        return new ControllerState(
-            ToButtons(digital),
-            ToHat(digital),
+        return ControllerStateComposer.WithDigitalControls(new ControllerState(
+            GameButtons.None,
+            HatPosition.Neutral,
             leftStick,
             rightStick,
             leftTrigger,
-            rightTrigger);
+            rightTrigger), digital);
     }
 
     private static float ReadAxis(HostInputSnapshot input, HostControlId source) =>
@@ -276,49 +274,4 @@ public static class InputMapper
     private static byte ToTriggerByte(float value) =>
         (byte)Math.Clamp((int)MathF.Round(value * 255f), 0, 255);
 
-    private static GameButtons ToButtons(HashSet<CanonicalDigitalControl> controls)
-    {
-        GameButtons buttons = GameButtons.None;
-        foreach (CanonicalDigitalControl control in controls)
-        {
-            buttons |= control switch
-            {
-                CanonicalDigitalControl.A => GameButtons.A,
-                CanonicalDigitalControl.B => GameButtons.B,
-                CanonicalDigitalControl.X => GameButtons.X,
-                CanonicalDigitalControl.Y => GameButtons.Y,
-                CanonicalDigitalControl.LeftShoulder => GameButtons.LeftShoulder,
-                CanonicalDigitalControl.RightShoulder => GameButtons.RightShoulder,
-                CanonicalDigitalControl.LeftTrigger => GameButtons.LeftTrigger,
-                CanonicalDigitalControl.RightTrigger => GameButtons.RightTrigger,
-                CanonicalDigitalControl.Minus => GameButtons.Minus,
-                CanonicalDigitalControl.Plus => GameButtons.Plus,
-                CanonicalDigitalControl.Home => GameButtons.Home,
-                CanonicalDigitalControl.Capture => GameButtons.Capture,
-                _ => GameButtons.None,
-            };
-        }
-
-        return buttons;
-    }
-
-    private static HatPosition ToHat(HashSet<CanonicalDigitalControl> controls)
-    {
-        int vertical = (controls.Contains(CanonicalDigitalControl.DPadDown) ? 1 : 0)
-            - (controls.Contains(CanonicalDigitalControl.DPadUp) ? 1 : 0);
-        int horizontal = (controls.Contains(CanonicalDigitalControl.DPadRight) ? 1 : 0)
-            - (controls.Contains(CanonicalDigitalControl.DPadLeft) ? 1 : 0);
-        return (horizontal, vertical) switch
-        {
-            (0, -1) => HatPosition.Up,
-            (1, -1) => HatPosition.UpRight,
-            (1, 0) => HatPosition.Right,
-            (1, 1) => HatPosition.DownRight,
-            (0, 1) => HatPosition.Down,
-            (-1, 1) => HatPosition.DownLeft,
-            (-1, 0) => HatPosition.Left,
-            (-1, -1) => HatPosition.UpLeft,
-            _ => HatPosition.Neutral,
-        };
-    }
 }

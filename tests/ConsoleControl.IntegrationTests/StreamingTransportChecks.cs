@@ -24,6 +24,7 @@ internal static class StreamingTransportChecks
 {
     public static async Task RunAsync()
     {
+        VerifyCadencePolicy();
         string profilePath = Path.Combine(Path.GetTempPath(), $"consolecontrol-stream-{Guid.NewGuid():N}.json");
         RecordingOutput output = new();
         WebApplicationBuilder builder = WebApplication.CreateBuilder();
@@ -33,9 +34,8 @@ internal static class StreamingTransportChecks
         builder.Services.AddGrpc();
         builder.Services.AddSingleton<IControllerOutput>(output);
         builder.Services.AddSingleton<ConsoleRuntime>();
-        builder.Services.AddSingleton(new InputProfileStore(profilePath));
         builder.Services.AddSingleton<IVideoCaptureAdapter, EmptyVideoAdapter>();
-        builder.Services.AddSingleton(new VideoSelectionStore(profilePath + ".video"));
+        builder.Services.AddSingleton<IVideoSelectionStore>(new VideoSelectionStore(profilePath + ".video"));
         builder.Services.AddSingleton(new VideoStreamAddress(new Uri("http://127.0.0.1/video.mjpeg")));
         builder.Services.AddSingleton<VideoRuntime>();
         builder.Services.AddSingleton<IScreenshotSource>(services =>
@@ -52,10 +52,13 @@ internal static class StreamingTransportChecks
         try
         {
             await VerifyCoalescingAndNeutralBarrierAsync(address, output);
+            await VerifyCancelledStartupCleanupAsync(address);
+            await VerifyInteractiveConflictAsync(address);
             await VerifyAbruptCancellationAsync(address, output, app.Services.GetRequiredService<ConsoleRuntime>());
             await VerifyInactivityCleanupAsync(address, output, app.Services.GetRequiredService<ConsoleRuntime>());
             await VerifyAutomationLeaseLifetimeAsync(
                 address, app.Services.GetRequiredService<ConsoleRuntime>());
+            await VerifyAutomationRevocationVisibilityAsync(address);
             await VerifyControlRequestAsync(address);
         }
         finally
@@ -66,6 +69,25 @@ internal static class StreamingTransportChecks
                 File.Delete(profilePath);
             }
         }
+    }
+
+    private static async Task VerifyAutomationRevocationVisibilityAsync(Uri address)
+    {
+        await using GrpcConsoleSession agent = GrpcConsoleSession.Connect(address);
+        await using GrpcConsoleSession gui = GrpcConsoleSession.Connect(address);
+        IAutomationSession automation = await agent.RequestAutomationControlAsync(
+            "Verify idle takeover visibility.", CancellationToken.None);
+        await using IControlSession interactive = await gui.TakeControlAsync(
+            ConsoleControl.Core.ControlPriority.InteractiveUser, CancellationToken.None);
+
+        AutomationSessionEnd ended = await automation.Completion.WaitAsync(TimeSpan.FromSeconds(1));
+        Require(ended.Reason == AutomationSessionEndReason.Preempted,
+            "automation completion did not report interactive takeover");
+        await interactive.DisposeAsync();
+
+        IAutomationSession reacquired = await agent.RequestAutomationControlAsync(
+            "Verify reacquisition after takeover.", CancellationToken.None);
+        await reacquired.DisposeAsync();
     }
 
     private static async Task VerifyAutomationLeaseLifetimeAsync(
@@ -152,12 +174,90 @@ internal static class StreamingTransportChecks
         Require(output.Count - beforeBurst <= 10,
             "a burst of 200 states was not coalesced before reaching the bridge");
 
-        Stopwatch neutralLatency = Stopwatch.StartNew();
+        int beforeHold = output.Count;
+        ControllerState held = ControllerState.Neutral with { Buttons = GameButtons.B };
+        await control.SetStateAsync(held, CancellationToken.None);
+        await WaitUntilAsync(() => output.Count >= beforeHold + 4, TimeSpan.FromSeconds(1));
+        Require(output.Since(beforeHold).Take(4).All(state => state == held),
+            "a held state was not refreshed continuously without neutral gaps");
+        await control.SetStateAsync(ControllerState.Neutral, CancellationToken.None);
+        await WaitUntilAsync(() => output.Last == ControllerState.Neutral, TimeSpan.FromSeconds(1));
+
+        int beforeTap = output.Count;
+        ControllerState pressed = ControllerState.Neutral with { Buttons = GameButtons.A };
+        await control.SetStateAsync(pressed, CancellationToken.None);
+        await control.SetStateAsync(ControllerState.Neutral, CancellationToken.None);
+        await WaitUntilAsync(
+            () => output.ContainsOrderedTransition(beforeTap, pressed, ControllerState.Neutral),
+            TimeSpan.FromSeconds(1));
+        IReadOnlyList<ControllerState> tapStates = output.Since(beforeTap);
+        int pressedIndex = tapStates.ToList().FindIndex(state => state == pressed);
+        int releasedIndex = tapStates.ToList().FindIndex(
+            pressedIndex + 1,
+            state => state == ControllerState.Neutral);
+        Require(pressedIndex >= 0 && releasedIndex > pressedIndex,
+            "a press and release submitted before the state pump ran were coalesced away");
+
         await control.SetStateAsync(ControllerState.Neutral, CancellationToken.None);
         await WaitUntilAsync(() => output.Last == ControllerState.Neutral, TimeSpan.FromMilliseconds(150));
-        neutralLatency.Stop();
-        Require(neutralLatency.Elapsed < TimeSpan.FromMilliseconds(150),
-            "a neutral barrier waited for the ordinary state cadence");
+    }
+
+    private static void VerifyCadencePolicy()
+    {
+        Require(GrpcConsoleSession.ControlStateRefreshInterval < TimeSpan.FromMilliseconds(250),
+            "the control-state refresh does not arrive before the firmware neutral timeout");
+        Require(GrpcConsoleSession.RequiresCadenceDelay(
+            hasPending: true,
+            nextIsNeutral: false,
+            heartbeatDue: false),
+            "an ordinary pending state bypassed the 60 Hz cadence");
+        Require(!GrpcConsoleSession.RequiresCadenceDelay(
+            hasPending: true,
+            nextIsNeutral: true,
+            heartbeatDue: false),
+            "a neutral state at the queue head did not bypass the cadence");
+    }
+
+    private static async Task VerifyCancelledStartupCleanupAsync(Uri address)
+    {
+        await using GrpcConsoleSession session = GrpcConsoleSession.Connect(address);
+        using CancellationTokenSource cancelled = new();
+        cancelled.Cancel();
+        try
+        {
+            await session.TakeControlAsync(
+                ConsoleControl.Core.ControlPriority.InteractiveUser,
+                cancelled.Token);
+            throw new InvalidOperationException("cancelled control startup unexpectedly succeeded");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        await using IControlSession recovered = await session.TakeControlAsync(
+            ConsoleControl.Core.ControlPriority.InteractiveUser,
+            CancellationToken.None);
+        Require(recovered.ConnectionState == ControlConnectionState.Ready,
+            "cancelled startup left a hidden control session in the client");
+    }
+
+    private static async Task VerifyInteractiveConflictAsync(Uri address)
+    {
+        await using GrpcConsoleSession first = GrpcConsoleSession.Connect(address);
+        await using GrpcConsoleSession second = GrpcConsoleSession.Connect(address);
+        await using IControlSession owner = await first.TakeControlAsync(
+            ConsoleControl.Core.ControlPriority.InteractiveUser,
+            CancellationToken.None);
+        try
+        {
+            await second.TakeControlAsync(
+                ConsoleControl.Core.ControlPriority.InteractiveUser,
+                CancellationToken.None);
+            throw new InvalidOperationException("a second interactive client appeared to acquire control");
+        }
+        catch (ConsoleControl.Client.ControlConflictException)
+        {
+        }
     }
 
     private static async Task VerifyAbruptCancellationAsync(
@@ -264,6 +364,27 @@ internal static class StreamingTransportChecks
         public ControllerState Last
         {
             get { lock (_gate) { return _states.LastOrDefault(); } }
+        }
+
+        public IReadOnlyList<ControllerState> Since(int index)
+        {
+            lock (_gate)
+            {
+                return _states.Skip(index).ToArray();
+            }
+        }
+
+        public bool ContainsOrderedTransition(
+            int index,
+            ControllerState first,
+            ControllerState second)
+        {
+            lock (_gate)
+            {
+                int firstIndex = _states.FindIndex(index, state => state == first);
+                return firstIndex >= 0 &&
+                    _states.FindIndex(firstIndex + 1, state => state == second) > firstIndex;
+            }
         }
 
         public Task ConnectAsync(CancellationToken cancellationToken)

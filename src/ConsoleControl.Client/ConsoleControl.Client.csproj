@@ -9,4 +9,7 @@
     <ProjectReference Include="../ConsoleControl.Core/ConsoleControl.Core.csproj" />
     <PackageReference Include="Grpc.Net.Client" Version="2.83.0" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ConsoleControl.IntegrationTests" />
+  </ItemGroup>
 </Project>

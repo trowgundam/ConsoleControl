@@ -7,7 +7,7 @@ namespace ConsoleControl.Daemon;
 
 internal sealed class VideoRuntime(
     IVideoCaptureAdapter adapter,
-    VideoSelectionStore store,
+    IVideoSelectionStore store,
     VideoStreamAddress streamAddress) : IAsyncDisposable, IScreenshotSource
 {
     private readonly SemaphoreSlim _selectionGate = new(1, 1);
@@ -38,14 +38,9 @@ internal sealed class VideoRuntime(
             (VideoSourceId? persisted, ulong revision) = await store.ReadAsync(cancellationToken)
                 .ConfigureAwait(false);
             _revision = revision;
-            ImmutableArray<VideoSource> sources = await adapter.GetSourcesAsync(cancellationToken)
-                .ConfigureAwait(false);
-            VideoSource? initial = persisted is { } id
-                ? sources.FirstOrDefault(source => source.Id == id) ?? sources.FirstOrDefault()
-                : sources.FirstOrDefault();
-            if (initial is not null)
+            if (persisted is { } selected)
             {
-                await SelectCoreAsync(initial, persist: persisted != initial.Id, cancellationToken)
+                await StartSelectionAsync(selected, cancellationToken)
                     .ConfigureAwait(false);
             }
         }
@@ -94,7 +89,7 @@ internal sealed class VideoRuntime(
             {
                 return new(sourceId, _revision, _status);
             }
-            await SelectCoreLockedAsync(source, persist: true, cancellationToken).ConfigureAwait(false);
+            await SelectCoreLockedAsync(source, cancellationToken).ConfigureAwait(false);
             return new(sourceId, _revision, _status);
         }
         finally
@@ -127,15 +122,14 @@ internal sealed class VideoRuntime(
         }
     }
 
-    private async Task SelectCoreAsync(
-        VideoSource source,
-        bool persist,
+    private async Task StartSelectionAsync(
+        VideoSourceId sourceId,
         CancellationToken cancellationToken)
     {
         await _selectionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await SelectCoreLockedAsync(source, persist, cancellationToken).ConfigureAwait(false);
+            await StartSelectionLockedAsync(sourceId).ConfigureAwait(false);
         }
         finally
         {
@@ -166,9 +160,10 @@ internal sealed class VideoRuntime(
 
     private async Task SelectCoreLockedAsync(
         VideoSource source,
-        bool persist,
         CancellationToken cancellationToken)
     {
+        ulong revision = checked(_revision + 1);
+        await store.WriteAsync(source.Id, revision, cancellationToken).ConfigureAwait(false);
         _status = $"Opening {source.DisplayName}";
         _captureStatus = new(
             source.Id,
@@ -180,25 +175,43 @@ internal sealed class VideoRuntime(
         await StopCaptureAsync().ConfigureAwait(false);
         _selected = source.Id;
         _generation++;
-        if (persist)
-        {
-            _revision++;
-            await store.WriteAsync(source.Id, _revision, cancellationToken).ConfigureAwait(false);
-        }
+        _revision = revision;
+        StartCaptureLocked(source.Id);
+    }
+
+    private async Task StartSelectionLockedAsync(VideoSourceId sourceId)
+    {
+        _selected = sourceId;
+        _status = "Waiting for the selected video source";
+        _captureStatus = new(
+            sourceId,
+            HardwareAvailability.Unknown,
+            VideoCaptureState.Starting,
+            null,
+            null,
+            _status);
+        await StopCaptureAsync().ConfigureAwait(false);
+        _generation++;
+        StartCaptureLocked(sourceId);
+    }
+
+    private void StartCaptureLocked(VideoSourceId sourceId)
+    {
         _frames.Clear();
         _captureStop = new();
         _captureTask = RunCaptureAsync(
-            source,
+            sourceId,
             _generation,
             _captureStop.Token);
     }
 
     private async Task RunCaptureAsync(
-        VideoSource source,
+        VideoSourceId sourceId,
         ulong generation,
         CancellationToken cancellationToken)
     {
         IVideoCaptureSession? session = null;
+        VideoSource? activeSource = null;
         int failures = 0;
         while (!cancellationToken.IsCancellationRequested && generation == _generation)
         {
@@ -209,15 +222,32 @@ internal sealed class VideoRuntime(
                 try
                 {
                     await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-                    session = await adapter.OpenAsync(source, cancellationToken).ConfigureAwait(false);
+                    ImmutableArray<VideoSource> sources = await adapter.GetSourcesAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    activeSource = sources.FirstOrDefault(candidate => candidate.Id == sourceId);
+                    if (activeSource is null)
+                    {
+                        failures++;
+                        _status = "Selected video source is unavailable; waiting for it to return";
+                        SetCaptureStatus(
+                            VideoCaptureState.Reconnecting,
+                            _status,
+                            availability: HardwareAvailability.Unavailable);
+                        continue;
+                    }
+                    session = await adapter.OpenAsync(activeSource, cancellationToken).ConfigureAwait(false);
                     if (generation != _generation)
                     {
                         await session.DisposeAsync().ConfigureAwait(false);
                         return;
                     }
                     _session = session;
-                    _status = $"Reconnected: {source.DisplayName}, {source.PreferredMode}";
-                    SetCaptureStatus(VideoCaptureState.Starting, _status, source.PreferredMode);
+                    _status = $"Reconnected: {activeSource.DisplayName}, {activeSource.PreferredMode}";
+                    SetCaptureStatus(
+                        VideoCaptureState.Starting,
+                        _status,
+                        activeSource.PreferredMode,
+                        HardwareAvailability.Available);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -227,11 +257,12 @@ internal sealed class VideoRuntime(
                 {
                     failures++;
                     _status = $"Video disconnected; reconnecting: {exception.Message}";
-                    SetCaptureStatus(VideoCaptureState.Reconnecting, _status, source.PreferredMode);
+                    SetCaptureStatus(VideoCaptureState.Reconnecting, _status);
                     continue;
                 }
             }
 
+            VideoSource streamingSource = activeSource!;
             try
             {
                 await foreach (byte[] jpeg in session.ReadFramesAsync(cancellationToken)
@@ -242,18 +273,18 @@ internal sealed class VideoRuntime(
                         return;
                     }
                     failures = 0;
-                    _status = $"Ready: {source.DisplayName}, {source.PreferredMode}";
+                    _status = $"Ready: {streamingSource.DisplayName}, {streamingSource.PreferredMode}";
                     EncodedVideoFrame frame = new(
                         generation,
                         ++_sequence,
-                        source.PreferredMode,
+                        streamingSource.PreferredMode,
                         DateTimeOffset.UtcNow,
                         jpeg);
                     _captureStatus = new(
-                        source.Id,
+                        sourceId,
                         HardwareAvailability.Available,
                         VideoCaptureState.Streaming,
-                        source.PreferredMode,
+                        streamingSource.PreferredMode,
                         frame.ReceivedAt,
                         _status);
                     _frames.Publish(frame);
@@ -268,7 +299,7 @@ internal sealed class VideoRuntime(
             {
                 failures++;
                 _status = $"Video disconnected; reconnecting: {exception.Message}";
-                SetCaptureStatus(VideoCaptureState.Reconnecting, _status, source.PreferredMode);
+                SetCaptureStatus(VideoCaptureState.Reconnecting, _status);
                 _frames.Interrupt();
             }
             finally
@@ -279,6 +310,7 @@ internal sealed class VideoRuntime(
                     _session = null;
                 }
                 session = null;
+                activeSource = null;
             }
 
         }
@@ -287,12 +319,14 @@ internal sealed class VideoRuntime(
     private void SetCaptureStatus(
         VideoCaptureState state,
         string detail,
-        VideoMode? mode = null) =>
+        VideoMode? mode = null,
+        HardwareAvailability? availability = null) =>
         _captureStatus = _captureStatus with
         {
             SelectedSourceId = _selected,
             CaptureState = state,
             ActiveMode = mode ?? _captureStatus.ActiveMode,
+            Availability = availability ?? _captureStatus.Availability,
             Detail = detail,
         };
 

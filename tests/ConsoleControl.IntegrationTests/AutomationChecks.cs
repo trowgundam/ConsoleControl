@@ -84,12 +84,35 @@ internal static class AutomationChecks
                 CancellationToken.None);
             Require(result.Outcome == AutomationOutcome.Completed,
                 "overlapping macro did not complete");
-            Require(macroOutput.States.Count >= 4
-                && macroOutput.States[0].Buttons == GameButtons.RightShoulder
-                && macroOutput.States[1].Buttons == (GameButtons.RightShoulder | GameButtons.A)
-                && macroOutput.States[2].Buttons == GameButtons.RightShoulder
+            int overlap = macroOutput.States.FindIndex(state =>
+                state.Buttons == (GameButtons.RightShoulder | GameButtons.A));
+            Require(overlap > 0
+                && macroOutput.States.Take(overlap).Any(state =>
+                    state.Buttons == GameButtons.RightShoulder)
+                && macroOutput.States.Skip(overlap + 1).Any(state =>
+                    state.Buttons == GameButtons.RightShoulder)
                 && macroOutput.States[^1] == ControllerState.Neutral,
                 "macro executor did not compose overlapping holds and presses");
+        }
+
+        FakeOutput sustainedHoldOutput = new();
+        await using (ConsoleRuntime console = new(sustainedHoldOutput))
+        {
+            ControlLease lease = await console.AcquireControlAsync(
+                automationOwner, ControlPriority.Automation, CancellationToken.None);
+            AutomationRuntime runtime = new(console, new UnusedScreenshots(), TimeProvider.System);
+            AutomationResult result = await runtime.ExecuteAsync(
+                automationOwner,
+                lease.Generation,
+                new AutomationSequence([
+                    new AutomationCommand.Hold(
+                        CanonicalDigitalControl.B, TimeSpan.FromMilliseconds(400)),
+                ]),
+                CancellationToken.None);
+            Require(result.Outcome == AutomationOutcome.Completed,
+                "a sustained automation hold did not complete");
+            Require(sustainedHoldOutput.States.Count(state => state.Buttons == GameButtons.B) >= 4,
+                "automation did not refresh a held state before the firmware safety timeout");
         }
 
         FakeOutput screenshotFailureOutput = new();

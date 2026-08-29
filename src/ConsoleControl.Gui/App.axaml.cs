@@ -17,8 +17,10 @@ public sealed partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             GrpcConsoleSession session = GrpcConsoleSession.Connect(Program.DaemonUri);
-            _viewModel = new MainWindowViewModel(session);
-            desktop.MainWindow = new MainWindow { DataContext = _viewModel };
+            GuiConfigurationStore configuration = new();
+            GuiConfiguration loaded = configuration.Load();
+            _viewModel = new MainWindowViewModel(session, configuration);
+            desktop.MainWindow = new MainWindow(loaded.Window) { DataContext = _viewModel };
         }
 
         base.OnFrameworkInitializationCompleted();

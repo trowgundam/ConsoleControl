@@ -22,6 +22,8 @@ public static class SdlDefaultInputProfile
             Bind(SDL.GamepadButton.Start, CanonicalDigitalControl.Plus),
             Bind(SDL.GamepadButton.Guide, CanonicalDigitalControl.Home),
             Bind(SDL.GamepadButton.Misc1, CanonicalDigitalControl.Capture),
+            Bind(SDL.GamepadButton.LeftStick, CanonicalDigitalControl.LeftStickClick),
+            Bind(SDL.GamepadButton.RightStick, CanonicalDigitalControl.RightStickClick),
             Bind(SDL.GamepadButton.DPadUp, CanonicalDigitalControl.DPadUp),
             Bind(SDL.GamepadButton.DPadRight, CanonicalDigitalControl.DPadRight),
             Bind(SDL.GamepadButton.DPadDown, CanonicalDigitalControl.DPadDown),

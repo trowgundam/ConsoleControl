@@ -172,16 +172,20 @@ public sealed class BluezControllerOutput : IControllerBridgeAdapter
         {
             if (discoveryRunning)
             {
+                using CancellationTokenSource cleanupTimeout = new(TimeSpan.FromSeconds(2));
                 try
                 {
                     await CallWithoutBodyAsync(
                         _adapterPath,
                         AdapterInterface,
                         "StopDiscovery",
-                        CancellationToken.None).ConfigureAwait(false);
+                        cleanupTimeout.Token).ConfigureAwait(false);
                 }
                 catch (DBusErrorReplyException exception)
                     when (exception.ErrorName.EndsWith("NotReady", StringComparison.Ordinal))
+                {
+                }
+                catch (OperationCanceledException) when (cleanupTimeout.IsCancellationRequested)
                 {
                 }
             }

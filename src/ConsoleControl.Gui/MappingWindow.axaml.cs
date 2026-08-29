@@ -9,13 +9,13 @@ public sealed partial class MappingWindow : Window
     public MappingWindow()
     {
         InitializeComponent();
-        KeyDown += (_, eventArgs) =>
-        {
-            if (DataContext is MappingWindowViewModel viewModel)
-            {
-                viewModel.HandleKey(eventArgs.PhysicalKey);
-            }
-        };
+        AddHandler(
+            KeyDownEvent,
+            (_, eventArgs) =>
+                eventArgs.Handled = (DataContext as MappingWindowViewModel)?
+                    .HandleKey(eventArgs.PhysicalKey) == true,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
         Closing += (_, _) => (DataContext as MappingWindowViewModel)?.CancelCapture();
     }
 

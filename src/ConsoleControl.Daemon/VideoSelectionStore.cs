@@ -4,7 +4,14 @@ using ConsoleControl.Core;
 
 namespace ConsoleControl.Daemon;
 
-internal sealed class VideoSelectionStore
+internal interface IVideoSelectionStore
+{
+    Task<(VideoSourceId? SourceId, ulong Revision)> ReadAsync(CancellationToken cancellationToken);
+
+    Task WriteAsync(VideoSourceId sourceId, ulong revision, CancellationToken cancellationToken);
+}
+
+internal sealed class VideoSelectionStore : IVideoSelectionStore
 {
     private readonly string _path;
 
@@ -27,9 +34,15 @@ internal sealed class VideoSelectionStore
         StoredSelection? stored = await JsonSerializer.DeserializeAsync<StoredSelection>(
             stream,
             cancellationToken: cancellationToken).ConfigureAwait(false);
-        return stored is null
-            ? (null, 0)
-            : (string.IsNullOrWhiteSpace(stored.SourceId) ? null : new(stored.SourceId), stored.Revision);
+        if (stored is null)
+        {
+            return (null, 0);
+        }
+        if (stored.SchemaVersion != 1)
+        {
+            throw new InvalidDataException($"Unsupported video selection schema {stored.SchemaVersion}.");
+        }
+        return (string.IsNullOrWhiteSpace(stored.SourceId) ? null : new(stored.SourceId), stored.Revision);
     }
 
     public async Task WriteAsync(

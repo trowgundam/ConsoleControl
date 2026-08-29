@@ -71,6 +71,12 @@
                   CommandParameter="{x:Static core:CanonicalStick.Right}" />
         </StackPanel>
         <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+          <Button Classes="map" Content="L3" Command="{Binding CaptureCommand}"
+                  CommandParameter="{x:Static core:CanonicalDigitalControl.LeftStickClick}" />
+          <Button Classes="map" Content="R3" Command="{Binding CaptureCommand}"
+                  CommandParameter="{x:Static core:CanonicalDigitalControl.RightStickClick}" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
           <Button Classes="map" Content="CAP" Command="{Binding CaptureCommand}"
                   CommandParameter="{x:Static core:CanonicalDigitalControl.Capture}" />
           <Button Classes="map" Content="HOME" Command="{Binding CaptureCommand}"

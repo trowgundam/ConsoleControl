@@ -52,21 +52,21 @@ internal sealed record DaemonOptions(int Port, int VideoPort, string Adapter, bo
 
         if (listen.Scheme != Uri.UriSchemeHttp ||
             !IPAddress.TryParse(listen.Host, out IPAddress? address) ||
-            !IPAddress.IsLoopback(address) ||
+            !address.Equals(IPAddress.Loopback) ||
             listen.Port is <= 0 or > 65535 ||
             listen.AbsolutePath != "/")
         {
-            throw new ArgumentException("--listen must be an HTTP loopback URI with a port and no path.");
+            throw new ArgumentException("--listen must use http://127.0.0.1 with a port and no path.");
         }
 
         if (videoListen.Scheme != Uri.UriSchemeHttp ||
             !IPAddress.TryParse(videoListen.Host, out IPAddress? videoAddress) ||
-            !IPAddress.IsLoopback(videoAddress) ||
+            !videoAddress.Equals(IPAddress.Loopback) ||
             videoListen.Port is <= 0 or > 65535 ||
             videoListen.AbsolutePath != "/" ||
             videoListen.Port == listen.Port)
         {
-            throw new ArgumentException("--video-listen must be a distinct HTTP loopback URI with a port and no path.");
+            throw new ArgumentException("--video-listen must use http://127.0.0.1 with a distinct port and no path.");
         }
 
         return new DaemonOptions(listen.Port, videoListen.Port, adapter, false);

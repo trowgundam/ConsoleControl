@@ -34,37 +34,42 @@
   </Window.Styles>
 
   <Grid RowDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto" Margin="24" RowSpacing="12">
-    <StackPanel Grid.Row="0" Spacing="8">
-      <Grid ColumnDefinitions="130,*" ColumnSpacing="12">
-        <TextBlock Text="Controller bridge" VerticalAlignment="Center" />
-        <ComboBox Grid.Column="1"
-                  IsEnabled="{Binding !HasControl}"
-                  ItemsSource="{Binding ControllerBridges}"
-                  SelectedItem="{Binding SelectedControllerBridge, Mode=TwoWay}">
-          <ComboBox.ItemTemplate>
-            <DataTemplate x:DataType="core:ControllerBridge">
-              <TextBlock Text="{Binding DisplayName}" />
-            </DataTemplate>
-          </ComboBox.ItemTemplate>
-        </ComboBox>
-      </Grid>
-      <Grid ColumnDefinitions="130,*,Auto" ColumnSpacing="12">
-        <TextBlock Text="Video source" VerticalAlignment="Center" />
-        <ComboBox Grid.Column="1"
-                  ItemsSource="{Binding VideoSources}"
-                  SelectedItem="{Binding SelectedVideoSource, Mode=TwoWay}">
-          <ComboBox.ItemTemplate>
-            <DataTemplate x:DataType="core:VideoSource">
-              <TextBlock Text="{Binding DisplayName}" />
-            </DataTemplate>
-          </ComboBox.ItemTemplate>
-        </ComboBox>
-        <TextBlock Grid.Column="2"
-                   Text="{Binding VideoStatusText}"
-                   VerticalAlignment="Center"
-                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
-      </Grid>
-    </StackPanel>
+    <Grid Grid.Row="0"
+          RowDefinitions="Auto,Auto"
+          ColumnDefinitions="130,249,*"
+          ColumnSpacing="12"
+          RowSpacing="8">
+      <TextBlock Grid.Row="0" Text="Controller bridge" VerticalAlignment="Center" />
+      <ComboBox Grid.Row="0" Grid.Column="1"
+                IsEnabled="{Binding !HasControl}"
+                ItemsSource="{Binding ControllerBridges}"
+                SelectedItem="{Binding SelectedControllerBridge, Mode=TwoWay}">
+        <ComboBox.ItemTemplate>
+          <DataTemplate x:DataType="core:ControllerBridge">
+            <TextBlock Text="{Binding DisplayName}" />
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
+
+      <TextBlock Grid.Row="1" Text="Video source" VerticalAlignment="Center" />
+      <ComboBox Grid.Row="1" Grid.Column="1"
+                ItemsSource="{Binding VideoSources}"
+                SelectedItem="{Binding SelectedVideoSource, Mode=TwoWay}">
+        <ComboBox.ItemTemplate>
+          <DataTemplate x:DataType="core:VideoSource">
+            <TextBlock Text="{Binding DisplayName}" />
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
+
+      <TextBlock Grid.Row="0"
+                 Grid.RowSpan="2"
+                 Grid.Column="2"
+                 Text="{Binding VideoStatusText}"
+                 TextWrapping="Wrap"
+                 VerticalAlignment="Center"
+                 Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
+    </Grid>
 
     <Border Grid.Row="1"
             Background="Black"
@@ -157,6 +162,14 @@
       </Grid>
 
       <StackPanel Grid.Column="1" HorizontalAlignment="Center" Spacing="14">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
+          <Button Classes="controller" Content="L3"
+                  Command="{Binding PulseControlCommand}"
+                  CommandParameter="{x:Static core:CanonicalDigitalControl.LeftStickClick}" />
+          <Button Classes="controller" Content="R3"
+                  Command="{Binding PulseControlCommand}"
+                  CommandParameter="{x:Static core:CanonicalDigitalControl.RightStickClick}" />
+        </StackPanel>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
           <Button Classes="controller system" Content="CAP"
                   Command="{Binding PulseControlCommand}"

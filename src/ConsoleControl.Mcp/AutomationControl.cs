@@ -10,7 +10,7 @@ internal sealed class AutomationControl(IConsoleSession console) : IAsyncDisposa
     private readonly SemaphoreSlim _acquireGate = new(1, 1);
     private IAutomationSession? _control;
 
-    public bool HasControl => Volatile.Read(ref _control) is not null;
+    public bool HasControl => Volatile.Read(ref _control) is { Completion.IsCompleted: false };
 
     public Task<Screenshot> GetScreenshotAsync(CancellationToken cancellationToken) =>
         console.GetScreenshotAsync(cancellationToken);
@@ -51,7 +51,7 @@ internal sealed class AutomationControl(IConsoleSession console) : IAsyncDisposa
         string reason,
         CancellationToken cancellationToken)
     {
-        if (Volatile.Read(ref _control) is not null)
+        if (HasControl)
         {
             return false;
         }
@@ -59,12 +59,14 @@ internal sealed class AutomationControl(IConsoleSession console) : IAsyncDisposa
         await _acquireGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_control is not null)
+            if (_control is { Completion.IsCompleted: false })
             {
                 return false;
             }
-            _control = await console.RequestAutomationControlAsync(reason, cancellationToken)
+            IAutomationSession acquired = await console.RequestAutomationControlAsync(reason, cancellationToken)
                 .ConfigureAwait(false);
+            _control = acquired;
+            _ = ObserveCompletionAsync(acquired);
             return true;
         }
         finally
@@ -77,9 +79,16 @@ internal sealed class AutomationControl(IConsoleSession console) : IAsyncDisposa
         AutomationSequence sequence,
         CancellationToken cancellationToken)
     {
-        IAutomationSession control = Volatile.Read(ref _control)
-            ?? throw new InvalidOperationException(
+        IAutomationSession? control = Volatile.Read(ref _control);
+        if (control is null || control.Completion.IsCompleted)
+        {
+            if (control is not null)
+            {
+                await ForgetControlAsync(control).ConfigureAwait(false);
+            }
+            throw new InvalidOperationException(
                 "Automation does not have control. Call console_request_control with a reason first.");
+        }
         try
         {
             AutomationResult result = await control.RunAsync(sequence, cancellationToken)
@@ -116,6 +125,18 @@ internal sealed class AutomationControl(IConsoleSession console) : IAsyncDisposa
         if (ReferenceEquals(Interlocked.CompareExchange(ref _control, null, expected), expected))
         {
             await expected.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task ObserveCompletionAsync(IAutomationSession control)
+    {
+        try
+        {
+            await control.Completion.ConfigureAwait(false);
+        }
+        finally
+        {
+            await ForgetControlAsync(control).ConfigureAwait(false);
         }
     }
 }
