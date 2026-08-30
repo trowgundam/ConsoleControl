@@ -19,7 +19,12 @@ public sealed partial class App : Application
             GrpcConsoleSession session = GrpcConsoleSession.Connect(Program.DaemonUri);
             GuiConfigurationStore configuration = new();
             GuiConfiguration loaded = configuration.Load();
-            _viewModel = new MainWindowViewModel(session, configuration);
+            AppearanceController appearance = new(
+                this,
+                configuration,
+                new CatppuccinPaletteProvider(),
+                loaded.Appearance);
+            _viewModel = new MainWindowViewModel(session, configuration, appearance);
             desktop.MainWindow = new MainWindow(loaded.Window) { DataContext = _viewModel };
         }
 

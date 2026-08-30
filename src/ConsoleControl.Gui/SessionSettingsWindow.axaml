@@ -1,0 +1,113 @@
+<Window
+    x:Class="ConsoleControl.Gui.SessionSettingsWindow"
+    x:DataType="local:MainWindowViewModel"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:ConsoleControl.Gui"
+    xmlns:core="using:ConsoleControl.Core"
+    Title="ConsoleControl settings"
+    Width="560"
+    Height="640"
+    MinWidth="500"
+    MinHeight="560"
+    WindowStartupLocation="CenterOwner"
+    CanResize="True">
+  <Window.Styles>
+    <Style Selector="ListBox.accent-picker">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="ListBox.accent-picker ListBoxItem">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="2" />
+      <Setter Property="CornerRadius" Value="16" />
+      <Setter Property="Padding" Value="2" />
+      <Setter Property="Margin" Value="1" />
+    </Style>
+    <Style Selector="ListBox.accent-picker ListBoxItem:selected">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Cc.Text}" />
+    </Style>
+  </Window.Styles>
+  <ScrollViewer>
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto" Margin="28" RowSpacing="18">
+      <StackPanel Grid.Row="0" Spacing="3">
+        <TextBlock Text="Session settings" FontSize="26" FontWeight="SemiBold" />
+        <TextBlock Classes="muted" Text="Hardware and appearance" />
+      </StackPanel>
+
+      <Border Grid.Row="1" Classes="card" Padding="20">
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="10">
+          <TextBlock Text="Console session" FontSize="17" FontWeight="SemiBold" />
+
+          <TextBlock Grid.Row="1" Classes="muted" Text="Controller bridge" />
+          <ComboBox Grid.Row="2"
+                    HorizontalAlignment="Stretch"
+                    IsEnabled="{Binding !HasControlSession}"
+                    ItemsSource="{Binding ControllerBridges}"
+                    SelectedItem="{Binding SelectedControllerBridge, Mode=TwoWay}">
+            <ComboBox.ItemTemplate>
+              <DataTemplate x:DataType="core:ControllerBridge">
+                <TextBlock Text="{Binding DisplayName}" />
+              </DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
+          <TextBlock Grid.Row="3" Classes="muted"
+                     IsVisible="{Binding HasControlSession}"
+                     Text="Release control before changing the controller bridge."
+                     TextWrapping="Wrap" />
+
+          <StackPanel Grid.Row="4" Spacing="6" Margin="0,8,0,0"
+                      HorizontalAlignment="Stretch">
+            <TextBlock Classes="muted" Text="Video source" />
+            <ComboBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding VideoSources}"
+                      SelectedItem="{Binding SelectedVideoSource, Mode=TwoWay}">
+              <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="core:VideoSource">
+                  <TextBlock Text="{Binding DisplayName}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBlock Classes="muted" Text="{Binding VideoStatusText}"
+                       FontSize="11" Margin="2,0"
+                       TextWrapping="Wrap" MaxHeight="96" />
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <Border Grid.Row="2" Classes="card" Padding="20">
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="10">
+          <TextBlock Text="Appearance" FontSize="17" FontWeight="SemiBold" />
+          <TextBlock Grid.Row="1" Classes="muted" Text="Catppuccin flavor" />
+          <ComboBox Grid.Row="2"
+                    ItemsSource="{Binding Appearance.FlavorChoices}"
+                    SelectedItem="{Binding Appearance.SelectedFlavor, Mode=TwoWay}" />
+          <TextBlock Grid.Row="3" Classes="muted" Text="Accent color" />
+          <ListBox Grid.Row="4" Classes="accent-picker"
+                   ItemsSource="{Binding Appearance.AccentChoices}"
+                   SelectedItem="{Binding Appearance.SelectedAccent, Mode=TwoWay}">
+            <ListBox.ItemsPanel>
+              <ItemsPanelTemplate>
+                <WrapPanel Orientation="Horizontal" />
+              </ItemsPanelTemplate>
+            </ListBox.ItemsPanel>
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="local:AccentOption">
+                <Ellipse Width="22" Height="22" Fill="{Binding PreviewBrush}"
+                         ToolTip.Tip="{Binding DisplayName}" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <TextBlock Grid.Row="5" Classes="muted" Text="{Binding Appearance.StatusText}"
+                     TextWrapping="Wrap" />
+        </Grid>
+      </Border>
+
+      <Button Grid.Row="3" HorizontalAlignment="Right" Classes="primary"
+              Content="Done" Click="Close_Click" />
+    </Grid>
+  </ScrollViewer>
+</Window>

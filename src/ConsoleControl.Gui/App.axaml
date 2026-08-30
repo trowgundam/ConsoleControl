@@ -2,7 +2,67 @@
     x:Class="ConsoleControl.Gui.App"
     xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Application.Resources>
+    <SolidColorBrush x:Key="Cc.Background" Color="#1e1e2e" />
+    <SolidColorBrush x:Key="Cc.SecondaryBackground" Color="#181825" />
+    <SolidColorBrush x:Key="Cc.Panel" Color="#313244" />
+    <SolidColorBrush x:Key="Cc.RaisedPanel" Color="#45475a" />
+    <SolidColorBrush x:Key="Cc.Border" Color="#585b70" />
+    <SolidColorBrush x:Key="Cc.Text" Color="#cdd6f4" />
+    <SolidColorBrush x:Key="Cc.MutedText" Color="#a6adc8" />
+    <SolidColorBrush x:Key="Cc.Accent" Color="#89b4fa" />
+    <SolidColorBrush x:Key="Cc.OnAccent" Color="#1e1e2e" />
+    <SolidColorBrush x:Key="Cc.Success" Color="#a6e3a1" />
+    <SolidColorBrush x:Key="Cc.Warning" Color="#f9e2af" />
+    <SolidColorBrush x:Key="Cc.Error" Color="#f38ba8" />
+    <SolidColorBrush x:Key="Cc.VideoBackground" Color="#11111b" />
+  </Application.Resources>
   <Application.Styles>
     <FluentTheme />
+    <Style Selector="Window">
+      <Setter Property="Background" Value="{DynamicResource Cc.Background}" />
+      <Setter Property="Foreground" Value="{DynamicResource Cc.Text}" />
+    </Style>
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource Cc.Text}" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+      <Setter Property="Foreground" Value="{DynamicResource Cc.MutedText}" />
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Background" Value="{DynamicResource Cc.Panel}" />
+      <Setter Property="Foreground" Value="{DynamicResource Cc.Text}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Cc.Border}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Padding" Value="14,8" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="{DynamicResource Cc.Accent}" />
+      <Setter Property="Foreground" Value="{DynamicResource Cc.OnAccent}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Cc.Accent}" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.icon">
+      <Setter Property="Width" Value="38" />
+      <Setter Property="Height" Value="38" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="FontSize" Value="18" />
+    </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="Background" Value="{DynamicResource Cc.Panel}" />
+      <Setter Property="Foreground" Value="{DynamicResource Cc.Text}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Cc.Border}" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="MinHeight" Value="38" />
+    </Style>
+    <Style Selector="Border.card">
+      <Setter Property="Background" Value="{DynamicResource Cc.SecondaryBackground}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Cc.Border}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="12" />
+    </Style>
   </Application.Styles>
 </Application>

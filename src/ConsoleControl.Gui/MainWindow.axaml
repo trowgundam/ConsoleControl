@@ -6,211 +6,329 @@
     xmlns:local="using:ConsoleControl.Gui"
     xmlns:core="using:ConsoleControl.Core"
     Title="ConsoleControl"
-    Width="1000"
-    Height="900"
-    MinWidth="760"
-    MinHeight="700"
+    Width="1100"
+    Height="760"
+    MinWidth="840"
+    MinHeight="680"
     WindowStartupLocation="CenterScreen">
+  <Window.Resources>
+    <DataTemplate x:Key="DPadControlsTemplate" x:DataType="local:MainWindowViewModel">
+      <Grid Width="96" Height="96" RowDefinitions="32,32,32" ColumnDefinitions="32,32,32">
+        <Button Grid.Row="0" Grid.Column="1" Classes="controller dock dpad" Content="▲"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadUp}" />
+        <Button Grid.Row="1" Grid.Column="0" Classes="controller dock dpad" Content="◀"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadLeft}" />
+        <Button Grid.Row="1" Grid.Column="2" Classes="controller dock dpad" Content="▶"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadRight}" />
+        <Button Grid.Row="2" Grid.Column="1" Classes="controller dock dpad" Content="▼"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadDown}" />
+      </Grid>
+    </DataTemplate>
+    <DataTemplate x:Key="FaceButtonControlsTemplate" x:DataType="local:MainWindowViewModel">
+      <Grid Width="108" Height="108" RowDefinitions="36,36,36" ColumnDefinitions="36,36,36">
+        <Button Grid.Row="0" Grid.Column="1" Classes="controller dock-face accent-face" Content="X"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.X}" />
+        <Button Grid.Row="1" Grid.Column="0" Classes="controller dock-face accent-face" Content="Y"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.Y}" />
+        <Button Grid.Row="1" Grid.Column="2" Classes="controller dock-face accent-face" Content="A"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.A}" />
+        <Button Grid.Row="2" Grid.Column="1" Classes="controller dock-face accent-face" Content="B"
+                Command="{Binding PulseControlCommand}"
+                CommandParameter="{x:Static core:CanonicalDigitalControl.B}" />
+      </Grid>
+    </DataTemplate>
+    <DataTemplate x:Key="InputSourceSelectorTemplate" x:DataType="local:MainWindowViewModel">
+      <ComboBox ItemsSource="{Binding InputSources}"
+                SelectedItem="{Binding SelectedInputSource, Mode=TwoWay}">
+        <ComboBox.ItemTemplate>
+          <DataTemplate x:DataType="local:InputSourceOption">
+            <TextBlock Text="{Binding DisplayName}" />
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
+    </DataTemplate>
+    <DataTemplate x:Key="EditMappingActionTemplate" x:DataType="local:MainWindowViewModel">
+      <Button Content="Edit Mapping" IsEnabled="{Binding CanEditMapping}"
+              HorizontalAlignment="Stretch" Click="OpenMapping_Click" />
+    </DataTemplate>
+    <DataTemplate x:Key="TakeControlActionTemplate" x:DataType="local:MainWindowViewModel">
+      <Button Content="Take Control" IsVisible="{Binding !HasControlSession}"
+              HorizontalAlignment="Stretch" Command="{Binding ToggleControlCommand}" />
+    </DataTemplate>
+    <DataTemplate x:Key="ReleaseControlActionTemplate" x:DataType="local:MainWindowViewModel">
+      <Button Classes.primary="{Binding HasControl}" Content="Release Control"
+              IsVisible="{Binding HasControlSession}" HorizontalAlignment="Stretch"
+              Command="{Binding ToggleControlCommand}" />
+    </DataTemplate>
+  </Window.Resources>
   <Window.Styles>
     <Style Selector="Button.controller">
-      <Setter Property="Width" Value="64" />
-      <Setter Property="Height" Value="52" />
-      <Setter Property="FontSize" Value="17" />
+      <Setter Property="Width" Value="46" />
+      <Setter Property="Height" Value="40" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="FontSize" Value="13" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="HorizontalContentAlignment" Value="Center" />
       <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
-    <Style Selector="Button.face">
-      <Setter Property="Width" Value="66" />
-      <Setter Property="Height" Value="66" />
-      <Setter Property="CornerRadius" Value="33" />
-      <Setter Property="FontSize" Value="22" />
+    <Style Selector="Button.controller.compact">
+      <Setter Property="Width" Value="30" />
+      <Setter Property="Height" Value="30" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="CornerRadius" Value="15" />
     </Style>
-    <Style Selector="Button.system">
-      <Setter Property="Width" Value="52" />
-      <Setter Property="Height" Value="38" />
-      <Setter Property="FontSize" Value="14" />
+    <Style Selector="Button.controller.dock">
+      <Setter Property="Width" Value="36" />
+      <Setter Property="Height" Value="32" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="CornerRadius" Value="7" />
+    </Style>
+    <Style Selector="Button.controller.dpad">
+      <Setter Property="Width" Value="32" />
+      <Setter Property="Height" Value="32" />
+    </Style>
+    <Style Selector="Button.controller.dock-face">
+      <Setter Property="Width" Value="36" />
+      <Setter Property="Height" Value="36" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="CornerRadius" Value="18" />
+      <Setter Property="Background" Value="{DynamicResource Cc.RaisedPanel}" />
+    </Style>
+    <Style Selector="Button.controller.face">
+      <Setter Property="Width" Value="46" />
+      <Setter Property="Height" Value="46" />
+      <Setter Property="CornerRadius" Value="23" />
+      <Setter Property="Background" Value="{DynamicResource Cc.RaisedPanel}" />
+    </Style>
+    <Style Selector="Button.controller.accent-face">
+      <Setter Property="Foreground" Value="{DynamicResource Cc.Accent}" />
+    </Style>
+    <Style Selector="Border.session-pill">
+      <Setter Property="Background" Value="{DynamicResource Cc.Panel}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Cc.Border}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="14" />
+      <Setter Property="Padding" Value="11,6" />
+      <Setter Property="Transitions">
+        <Transitions>
+          <BrushTransition Property="Background" Duration="0:0:0.18" />
+          <BrushTransition Property="BorderBrush" Duration="0:0:0.18" />
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="Border.session-pill.attention">
+      <Setter Property="Background" Value="{DynamicResource Cc.RaisedPanel}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Cc.Accent}" />
+    </Style>
+    <Style Selector="Button.session-pill">
+      <Setter Property="Background" Value="{DynamicResource Cc.Panel}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Cc.Border}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="14" />
+      <Setter Property="Padding" Value="11,6" />
+      <Setter Property="MinHeight" Value="0" />
     </Style>
   </Window.Styles>
 
-  <Grid RowDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto" Margin="24" RowSpacing="12">
-    <Grid Grid.Row="0"
-          RowDefinitions="Auto,Auto"
-          ColumnDefinitions="130,249,*"
-          ColumnSpacing="12"
-          RowSpacing="8">
-      <TextBlock Grid.Row="0" Text="Controller bridge" VerticalAlignment="Center" />
-      <ComboBox Grid.Row="0" Grid.Column="1"
-                IsEnabled="{Binding !HasControl}"
-                ItemsSource="{Binding ControllerBridges}"
-                SelectedItem="{Binding SelectedControllerBridge, Mode=TwoWay}">
-        <ComboBox.ItemTemplate>
-          <DataTemplate x:DataType="core:ControllerBridge">
-            <TextBlock Text="{Binding DisplayName}" />
-          </DataTemplate>
-        </ComboBox.ItemTemplate>
-      </ComboBox>
-
-      <TextBlock Grid.Row="1" Text="Video source" VerticalAlignment="Center" />
-      <ComboBox Grid.Row="1" Grid.Column="1"
-                ItemsSource="{Binding VideoSources}"
-                SelectedItem="{Binding SelectedVideoSource, Mode=TwoWay}">
-        <ComboBox.ItemTemplate>
-          <DataTemplate x:DataType="core:VideoSource">
-            <TextBlock Text="{Binding DisplayName}" />
-          </DataTemplate>
-        </ComboBox.ItemTemplate>
-      </ComboBox>
-
-      <TextBlock Grid.Row="0"
-                 Grid.RowSpan="2"
-                 Grid.Column="2"
-                 Text="{Binding VideoStatusText}"
-                 TextWrapping="Wrap"
-                 VerticalAlignment="Center"
-                 Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
+  <Grid RowDefinitions="Auto,*,Auto,Auto" Background="{DynamicResource Cc.Background}">
+    <Grid Grid.Row="0" Margin="18,12">
+      <TextBlock Text="ConsoleControl" FontSize="20" FontWeight="Bold"
+                 HorizontalAlignment="Left" VerticalAlignment="Center" />
+      <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+        <Button Classes="session-pill"
+                IsVisible="{Binding CanRetryDaemonConnection}"
+                Command="{Binding RetryDaemonCommand}"
+                ToolTip.Tip="{Binding SessionDetailText}"
+                AutomationProperties.Name="Retry daemon connection">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Border Width="8" Height="8" CornerRadius="4"
+                    Background="{DynamicResource Cc.Accent}"
+                    VerticalAlignment="Center" />
+            <TextBlock Text="{Binding SessionHeadline}" FontSize="12"
+                       FontWeight="SemiBold" VerticalAlignment="Center" />
+          </StackPanel>
+        </Button>
+        <Border Classes="session-pill"
+                Classes.attention="{Binding NeedsControlAttention}"
+                IsVisible="{Binding !CanRetryDaemonConnection}"
+                ToolTip.Tip="{Binding SessionDetailText}">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Border Width="8" Height="8" CornerRadius="4"
+                    Background="{DynamicResource Cc.Accent}"
+                    VerticalAlignment="Center" />
+            <TextBlock Text="{Binding SessionHeadline}" FontSize="12"
+                       FontWeight="SemiBold" VerticalAlignment="Center" />
+          </StackPanel>
+        </Border>
+      </Grid>
+      <Button Classes="icon" Click="OpenSettings_Click"
+              HorizontalAlignment="Right"
+              AutomationProperties.Name="Open session settings">
+        <Path Width="18" Height="18" Stretch="Uniform"
+              Fill="{DynamicResource Cc.Text}"
+              Data="M12,8.5 A3.5,3.5 0 1 0 12,15.5 A3.5,3.5 0 1 0 12,8.5 M19.4,13 C19.45,12.67 19.5,12.34 19.5,12 C19.5,11.66 19.45,11.33 19.4,11 L21.5,9.4 L19.5,6 L17,7 C16.5,6.6 16,6.3 15.4,6.1 L15,3.5 L11,3.5 L10.6,6.1 C10,6.3 9.5,6.6 9,7 L6.5,6 L4.5,9.4 L6.6,11 C6.55,11.33 6.5,11.66 6.5,12 C6.5,12.34 6.55,12.67 6.6,13 L4.5,14.6 L6.5,18 L9,17 C9.5,17.4 10,17.7 10.6,17.9 L11,20.5 L15,20.5 L15.4,17.9 C16,17.7 16.5,17.4 17,17 L19.5,18 L21.5,14.6 Z" />
+      </Button>
     </Grid>
 
-    <Border Grid.Row="1"
-            Background="Black"
-            BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
-            BorderThickness="1"
-            CornerRadius="4"
-            ClipToBounds="True">
-      <Image Source="{Binding VideoImage}" Stretch="Uniform" />
+    <Border Grid.Row="1" Margin="18,0" ClipToBounds="True" CornerRadius="12"
+            Background="{DynamicResource Cc.VideoBackground}"
+            BorderBrush="{DynamicResource Cc.Border}" BorderThickness="1">
+      <Grid>
+        <Image Source="{Binding VideoImage}" Stretch="Uniform" />
+        <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="14"
+                Padding="9,6" CornerRadius="7"
+                Background="{DynamicResource Cc.SecondaryBackground}"
+                IsVisible="{Binding HasVideoFrame}">
+          <TextBlock Text="{Binding SelectedVideoSource.DisplayName}"
+                     FontSize="11" FontWeight="SemiBold" />
+        </Border>
+        <StackPanel IsVisible="{Binding !HasVideoFrame}"
+                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                    MaxWidth="520" Spacing="10">
+          <TextBlock Text="{Binding VideoHeadline}" FontSize="19"
+                     FontWeight="SemiBold" TextAlignment="Center" TextWrapping="Wrap" />
+          <TextBlock Classes="muted"
+                     Text="Choose a video source in Settings if this session has not been configured. ConsoleControl reconnects automatically when an existing source returns."
+                     TextAlignment="Center" TextWrapping="Wrap" />
+          <Button Content="Open Settings" HorizontalAlignment="Center"
+                  Click="OpenSettings_Click" />
+        </StackPanel>
+      </Grid>
     </Border>
 
-    <StackPanel Grid.Row="2" Spacing="10">
-      <Border IsVisible="{Binding HasPendingControlRequest}"
-              Padding="12"
-              CornerRadius="4"
-              BorderThickness="1"
-              BorderBrush="{DynamicResource SystemAccentColor}">
-        <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10" RowSpacing="6">
-          <StackPanel Grid.Column="0" Grid.RowSpan="2">
-            <TextBlock Text="An agent is requesting control" FontWeight="SemiBold" />
-            <TextBlock Text="{Binding PendingControlRequestReason}" TextWrapping="Wrap" />
-          </StackPanel>
-          <Button Grid.Column="1" Grid.RowSpan="2"
-                  Content="Keep Control"
-                  Command="{Binding DeclineControlRequestCommand}" />
-          <Button Grid.Column="2" Grid.RowSpan="2"
-                  Content="Release Control"
-                  Command="{Binding ToggleControlCommand}" />
-        </Grid>
-      </Border>
-      <StackPanel Orientation="Horizontal" Spacing="12">
-        <Button Content="{Binding ControlActionText}"
+    <Border Grid.Row="2" Margin="18,10,18,0" Padding="14" CornerRadius="10"
+            IsVisible="{Binding HasPendingControlRequest}"
+            BorderBrush="{DynamicResource Cc.Warning}" BorderThickness="1"
+            Background="{DynamicResource Cc.SecondaryBackground}">
+      <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="9">
+        <StackPanel>
+          <TextBlock Text="An automation client is requesting control" FontWeight="SemiBold" />
+          <TextBlock Classes="muted" Text="{Binding PendingControlRequestReason}"
+                     TextWrapping="Wrap" />
+        </StackPanel>
+        <Button Grid.Column="1" Content="Keep Control"
+                Command="{Binding DeclineControlRequestCommand}" />
+        <Button Grid.Column="2" Classes.primary="{Binding HasControl}" Content="Release Control"
                 Command="{Binding ToggleControlCommand}" />
-        <TextBlock Text="Input source" VerticalAlignment="Center" />
-        <ComboBox Width="300"
-                  IsEnabled="{Binding HasControl}"
-                  ItemsSource="{Binding InputSources}"
-                  SelectedItem="{Binding SelectedInputSource, Mode=TwoWay}">
-          <ComboBox.ItemTemplate>
-            <DataTemplate x:DataType="local:InputSourceOption">
-              <TextBlock Text="{Binding DisplayName}" />
-            </DataTemplate>
-          </ComboBox.ItemTemplate>
-        </ComboBox>
-      </StackPanel>
-    </StackPanel>
-
-    <Grid Grid.Row="3" ColumnDefinitions="*,*,64,64,*,*" ColumnSpacing="8"
-          IsEnabled="{Binding HasControl}">
-      <Button Grid.Column="0" Classes="controller" Content="ZL"
-              Command="{Binding PulseControlCommand}"
-              CommandParameter="{x:Static core:CanonicalDigitalControl.LeftTrigger}" />
-      <Button Grid.Column="1" Classes="controller" Content="L"
-              Command="{Binding PulseControlCommand}"
-              CommandParameter="{x:Static core:CanonicalDigitalControl.LeftShoulder}" />
-      <Button Grid.Column="2" Classes="controller system" Content="−"
-              Command="{Binding PulseControlCommand}"
-              CommandParameter="{x:Static core:CanonicalDigitalControl.Minus}" />
-      <Button Grid.Column="3" Classes="controller system" Content="+"
-              Command="{Binding PulseControlCommand}"
-              CommandParameter="{x:Static core:CanonicalDigitalControl.Plus}" />
-      <Button Grid.Column="4" Classes="controller" Content="R"
-              HorizontalAlignment="Right"
-              Command="{Binding PulseControlCommand}"
-              CommandParameter="{x:Static core:CanonicalDigitalControl.RightShoulder}" />
-      <Button Grid.Column="5" Classes="controller" Content="ZR"
-              HorizontalAlignment="Right"
-              Command="{Binding PulseControlCommand}"
-              CommandParameter="{x:Static core:CanonicalDigitalControl.RightTrigger}" />
-    </Grid>
-
-    <Grid Grid.Row="4" ColumnDefinitions="1*,1.2*,1*" VerticalAlignment="Center"
-          IsEnabled="{Binding HasControl}">
-      <Grid Grid.Column="0" Width="180" Height="180"
-            RowDefinitions="60,60,60" ColumnDefinitions="60,60,60"
-            HorizontalAlignment="Center">
-        <Button Grid.Row="0" Grid.Column="1" Classes="controller" Content="▲"
-                Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadUp}" />
-        <Button Grid.Row="1" Grid.Column="0" Classes="controller" Content="◀"
-                Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadLeft}" />
-        <Border Grid.Row="1" Grid.Column="1" Width="56" Height="48"
-                Background="{DynamicResource SystemControlBackgroundBaseLowBrush}" />
-        <Button Grid.Row="1" Grid.Column="2" Classes="controller" Content="▶"
-                Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadRight}" />
-        <Button Grid.Row="2" Grid.Column="1" Classes="controller" Content="▼"
-                Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static core:CanonicalDigitalControl.DPadDown}" />
       </Grid>
+    </Border>
 
-      <StackPanel Grid.Column="1" HorizontalAlignment="Center" Spacing="14">
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
-          <Button Classes="controller" Content="L3"
-                  Command="{Binding PulseControlCommand}"
-                  CommandParameter="{x:Static core:CanonicalDigitalControl.LeftStickClick}" />
-          <Button Classes="controller" Content="R3"
-                  Command="{Binding PulseControlCommand}"
-                  CommandParameter="{x:Static core:CanonicalDigitalControl.RightStickClick}" />
+    <Border Grid.Row="3" Margin="18,10,18,16" Padding="12"
+            Background="{DynamicResource Cc.SecondaryBackground}"
+            BorderBrush="{DynamicResource Cc.Border}" BorderThickness="1" CornerRadius="12">
+      <Grid VerticalAlignment="Center">
+        <StackPanel Width="170" Spacing="4" HorizontalAlignment="Left"
+                    IsVisible="{Binding !IsControllerControlsHidden}">
+          <TextBlock Classes="muted" Text="Input source" FontSize="10"
+                     FontWeight="SemiBold" />
+          <ContentControl Content="{Binding}"
+                          ContentTemplate="{StaticResource InputSourceSelectorTemplate}" />
         </StackPanel>
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
-          <Button Classes="controller system" Content="CAP"
-                  Command="{Binding PulseControlCommand}"
-                  CommandParameter="{x:Static core:CanonicalDigitalControl.Capture}" />
-          <Button Classes="controller system" Content="HOME"
-                  Width="68"
-                  Command="{Binding PulseControlCommand}"
-                  CommandParameter="{x:Static core:CanonicalDigitalControl.Home}" />
+        <StackPanel Orientation="Horizontal" Spacing="10"
+                    HorizontalAlignment="Left" VerticalAlignment="Center"
+                    IsVisible="{Binding IsControllerControlsHidden}">
+          <TextBlock Classes="muted" Text="Input source" FontSize="10"
+                     FontWeight="SemiBold"
+                     VerticalAlignment="Center" />
+          <ContentControl Width="140" Content="{Binding}"
+                          ContentTemplate="{StaticResource InputSourceSelectorTemplate}" />
         </StackPanel>
-        <TextBlock Text="Each click sends an 80 ms press"
-                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
-                   HorizontalAlignment="Center" />
-      </StackPanel>
+        <Grid HorizontalAlignment="Center">
+          <StackPanel Spacing="6" HorizontalAlignment="Center"
+                      IsVisible="{Binding IsCompactControllerVisible}">
+            <StackPanel Orientation="Horizontal" Spacing="12" IsEnabled="{Binding HasControl}">
+              <ContentControl Content="{Binding}"
+                              ContentTemplate="{StaticResource DPadControlsTemplate}" />
+              <ContentControl Content="{Binding}"
+                              ContentTemplate="{StaticResource FaceButtonControlsTemplate}" />
+            </StackPanel>
+            <Button Content="Full Controller" HorizontalAlignment="Center"
+                    Click="CycleControllerLayout_Click" />
+          </StackPanel>
 
-      <Grid Grid.Column="2" Width="198" Height="198"
-            RowDefinitions="66,66,66" ColumnDefinitions="66,66,66"
-            HorizontalAlignment="Center">
-        <Button Grid.Row="0" Grid.Column="1" Classes="controller face" Content="X"
-                Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static core:CanonicalDigitalControl.X}" />
-        <Button Grid.Row="1" Grid.Column="0" Classes="controller face" Content="Y"
-                Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static core:CanonicalDigitalControl.Y}" />
-        <Button Grid.Row="1" Grid.Column="2" Classes="controller face" Content="A"
-                Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static core:CanonicalDigitalControl.A}" />
-        <Button Grid.Row="2" Grid.Column="1" Classes="controller face" Content="B"
-                Command="{Binding PulseControlCommand}"
-                CommandParameter="{x:Static core:CanonicalDigitalControl.B}" />
+          <StackPanel Spacing="6" HorizontalAlignment="Center"
+                      IsVisible="{Binding IsFullControllerVisible}">
+            <StackPanel Orientation="Horizontal" Spacing="12" IsEnabled="{Binding HasControl}">
+              <StackPanel Spacing="6" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
+                  <Button Classes="controller dock" Content="ZL" Command="{Binding PulseControlCommand}"
+                          CommandParameter="{x:Static core:CanonicalDigitalControl.LeftTrigger}" />
+                  <Button Classes="controller dock" Content="L" Command="{Binding PulseControlCommand}"
+                          CommandParameter="{x:Static core:CanonicalDigitalControl.LeftShoulder}" />
+                </StackPanel>
+                <ContentControl Content="{Binding}"
+                                ContentTemplate="{StaticResource DPadControlsTemplate}" />
+              </StackPanel>
+
+              <StackPanel Spacing="6" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button Classes="controller dock" Content="−" Command="{Binding PulseControlCommand}"
+                          CommandParameter="{x:Static core:CanonicalDigitalControl.Minus}" />
+                  <Button Classes="controller dock" Content="+" Command="{Binding PulseControlCommand}"
+                          CommandParameter="{x:Static core:CanonicalDigitalControl.Plus}" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button Classes="controller dock" Content="L3" Command="{Binding PulseControlCommand}"
+                          CommandParameter="{x:Static core:CanonicalDigitalControl.LeftStickClick}" />
+                  <Button Classes="controller dock" Content="R3" Command="{Binding PulseControlCommand}"
+                          CommandParameter="{x:Static core:CanonicalDigitalControl.RightStickClick}" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button Classes="controller dock" Content="CAP" Command="{Binding PulseControlCommand}"
+                          CommandParameter="{x:Static core:CanonicalDigitalControl.Capture}" />
+                  <Button Classes="controller dock" Content="HOME" Width="48"
+                          Command="{Binding PulseControlCommand}"
+                          CommandParameter="{x:Static core:CanonicalDigitalControl.Home}" />
+                </StackPanel>
+              </StackPanel>
+
+              <StackPanel Spacing="6" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
+                  <Button Classes="controller dock" Content="R" Command="{Binding PulseControlCommand}"
+                          CommandParameter="{x:Static core:CanonicalDigitalControl.RightShoulder}" />
+                  <Button Classes="controller dock" Content="ZR" Command="{Binding PulseControlCommand}"
+                          CommandParameter="{x:Static core:CanonicalDigitalControl.RightTrigger}" />
+                </StackPanel>
+                <ContentControl Content="{Binding}"
+                                ContentTemplate="{StaticResource FaceButtonControlsTemplate}" />
+              </StackPanel>
+            </StackPanel>
+            <Button Content="Hide Controller" HorizontalAlignment="Center"
+                    Click="CycleControllerLayout_Click" />
+          </StackPanel>
+
+          <Button Content="Compact Controller"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  IsVisible="{Binding IsControllerControlsHidden}"
+                  Click="CycleControllerLayout_Click" />
+        </Grid>
+        <StackPanel MinWidth="150" Spacing="7" HorizontalAlignment="Right"
+                    IsVisible="{Binding !IsControllerControlsHidden}">
+          <ContentControl Content="{Binding}"
+                          ContentTemplate="{StaticResource EditMappingActionTemplate}" />
+          <ContentControl Content="{Binding}"
+                          ContentTemplate="{StaticResource TakeControlActionTemplate}" />
+          <ContentControl Content="{Binding}"
+                          ContentTemplate="{StaticResource ReleaseControlActionTemplate}" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="7"
+                    HorizontalAlignment="Right" VerticalAlignment="Center"
+                    IsVisible="{Binding IsControllerControlsHidden}">
+          <ContentControl Content="{Binding}"
+                          ContentTemplate="{StaticResource EditMappingActionTemplate}" />
+          <ContentControl Content="{Binding}"
+                          ContentTemplate="{StaticResource TakeControlActionTemplate}" />
+          <ContentControl Content="{Binding}"
+                          ContentTemplate="{StaticResource ReleaseControlActionTemplate}" />
+        </StackPanel>
       </Grid>
-    </Grid>
-
-    <Button Grid.Row="5"
-            HorizontalAlignment="Center"
-            IsEnabled="{Binding HasControl}"
-            Content="Configure input mapping…"
-            Click="OpenMapping_Click" />
-
-    <TextBlock Grid.Row="6"
-        HorizontalAlignment="Center"
-        Text="{Binding StatusText}"
-        TextWrapping="Wrap" />
+    </Border>
   </Grid>
 </Window>

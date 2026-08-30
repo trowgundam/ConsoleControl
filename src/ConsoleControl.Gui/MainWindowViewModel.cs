@@ -13,10 +13,19 @@ using ConsoleControl.Input.Sdl;
 
 namespace ConsoleControl.Gui;
 
+internal enum OnScreenControllerLayout
+{
+    Compact,
+    Full,
+    Hidden,
+}
+
 public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposable
 {
     private readonly IConsoleSession _session;
     private readonly GuiConfigurationStore _configuration;
+    private readonly AppearanceController _appearance;
+    private readonly DaemonConnectionSupervisor _daemonSupervisor;
     private IControlSession? _control;
     private InputForwarder? _forwarder;
     private InputSourceOption? _selectedInputSource;
@@ -29,23 +38,38 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private bool _loadingControllerBridges;
     private ulong _controllerBridgeRevision;
     private PendingControlRequest? _pendingControlRequest;
-    private readonly CancellationTokenSource _statusStop = new();
-    private Task? _statusTask;
     private string _videoStatusText = "Finding video sources...";
+    private string _videoHeadline = "Finding video sources";
     private string _statusText = "Connecting to daemon...";
     private bool _keyboardFocused;
     private InputProfileKey? _preferredInputProfile;
     private long _inputSelectionGeneration;
+    private DaemonAvailability _daemonAvailability = DaemonAvailability.Connecting;
+    private Uri? _presentedVideoUri;
+    private bool _initialControlDecisionPending = true;
+    private bool _initialized;
+    private bool _needsControlAttention;
+    private long _controlAttentionGeneration;
+    private OnScreenControllerLayout _onScreenControllerLayout;
     private bool _disposed;
 
-    internal MainWindowViewModel(IConsoleSession session, GuiConfigurationStore configuration)
+    internal MainWindowViewModel(
+        IConsoleSession session,
+        GuiConfigurationStore configuration,
+        AppearanceController appearance)
     {
         _session = session;
         _configuration = configuration;
+        _appearance = appearance;
+        _daemonSupervisor = new(
+            session,
+            HandleDaemonConnectionEventAsync,
+            new CoalescingRetryWaiter());
         _preferredInputProfile = configuration.Current.LastInputSource;
         PulseControlCommand = new AsyncCommand<CanonicalDigitalControl>(PulseControlAsync);
         ToggleControlCommand = new AsyncCommand(ToggleControlAsync);
         DeclineControlRequestCommand = new AsyncCommand(DeclineControlRequestAsync);
+        RetryDaemonCommand = new AsyncCommand(RetryDaemonConnectionAsync);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -53,16 +77,77 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ICommand PulseControlCommand { get; }
     public ICommand ToggleControlCommand { get; }
     public ICommand DeclineControlRequestCommand { get; }
+    public ICommand RetryDaemonCommand { get; }
 
-    public bool HasControl => _control is not null;
-    public string ControlActionText => HasControl ? "Release Control" : "Take Control";
+    internal AppearanceController Appearance => _appearance;
+
+    public bool HasControl => _control is { } control && IsActiveControlState(control.ConnectionState);
+    public bool HasControlSession => _control is not null;
+    public bool CanEditMapping => _forwarder?.ActiveProfile is not null;
+    public string SessionHeadline => _daemonAvailability switch
+    {
+        DaemonAvailability.Connecting => "Connecting to daemon",
+        DaemonAvailability.Unavailable => "Daemon unavailable",
+        DaemonAvailability.Available when _control is { } control =>
+            ControlSessionHeadline(control.ConnectionState),
+        _ => "Observing",
+    };
+    public string SessionDetailText => FormatSessionDetailText(_daemonAvailability, StatusText);
+    public bool CanRetryDaemonConnection =>
+        !_disposed && _daemonAvailability == DaemonAvailability.Unavailable;
+    public bool NeedsControlAttention => _needsControlAttention;
+    public bool HasVideoFrame => VideoImage is not null;
     public bool HasPendingControlRequest => _pendingControlRequest is not null;
     public string PendingControlRequestReason => _pendingControlRequest?.Reason ?? string.Empty;
+
+    public bool IsCompactControllerVisible =>
+        _onScreenControllerLayout == OnScreenControllerLayout.Compact;
+    public bool IsFullControllerVisible =>
+        _onScreenControllerLayout == OnScreenControllerLayout.Full;
+    public bool IsControllerControlsHidden =>
+        _onScreenControllerLayout == OnScreenControllerLayout.Hidden;
 
     public ObservableCollection<InputSourceOption> InputSources { get; } = [];
     public ObservableCollection<VideoSource> VideoSources { get; } = [];
     public ObservableCollection<ControllerBridge> ControllerBridges { get; } = [];
     internal InputForwarder? Forwarder => _forwarder;
+
+    internal void CycleOnScreenControllerLayout()
+    {
+        _onScreenControllerLayout = NextOnScreenControllerLayout(_onScreenControllerLayout);
+        OnPropertyChanged(nameof(IsCompactControllerVisible));
+        OnPropertyChanged(nameof(IsFullControllerVisible));
+        OnPropertyChanged(nameof(IsControllerControlsHidden));
+    }
+
+    internal static OnScreenControllerLayout NextOnScreenControllerLayout(
+        OnScreenControllerLayout current) => current switch
+        {
+            OnScreenControllerLayout.Compact => OnScreenControllerLayout.Full,
+            OnScreenControllerLayout.Full => OnScreenControllerLayout.Hidden,
+            OnScreenControllerLayout.Hidden => OnScreenControllerLayout.Compact,
+            _ => throw new ArgumentOutOfRangeException(nameof(current), current, null),
+        };
+
+    internal static string FormatSessionDetailText(
+        DaemonAvailability availability,
+        string statusText) => availability == DaemonAvailability.Unavailable
+            ? $"{statusText} Start the ConsoleControl daemon, or click the status to retry."
+            : statusText;
+
+    internal static bool IsActiveControlState(ControlConnectionState state) =>
+        state == ControlConnectionState.Ready;
+
+    internal static string ControlSessionHeadline(ControlConnectionState state) => state switch
+    {
+        ControlConnectionState.Connecting => "Taking control",
+        ControlConnectionState.Ready => "You have control",
+        ControlConnectionState.WaitingForBridge => "Waiting for bridge",
+        ControlConnectionState.WaitingForControl => "Waiting for control",
+        ControlConnectionState.Reconnecting => "Reconnecting control",
+        ControlConnectionState.Stopped => "Control stopped",
+        _ => throw new ArgumentOutOfRangeException(nameof(state), state, null),
+    };
 
     public InputSourceOption? SelectedInputSource
     {
@@ -97,6 +182,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
             _statusText = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(SessionDetailText));
         }
     }
 
@@ -144,6 +230,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             Bitmap? previous = _videoImage;
             _videoImage = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(HasVideoFrame));
             previous?.Dispose();
         }
     }
@@ -162,28 +249,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    public string VideoHeadline
+    {
+        get => _videoHeadline;
+        private set
+        {
+            if (_videoHeadline == value)
+            {
+                return;
+            }
+            _videoHeadline = value;
+            OnPropertyChanged();
+        }
+    }
+
     public async Task InitializeAsync()
     {
-        await InitializeControllerBridgesAsync();
-        await InitializeVideoAsync();
-        try
+        if (_initialized)
         {
-            ConsoleStatus status = await _session.GetStatusAsync(CancellationToken.None);
-            ApplyPendingControlRequest(status.PendingControlRequest);
-            _statusTask = MonitorStatusAsync(_statusStop.Token);
-            if (status.ControlOwner == ControlOwner.None)
-            {
-                await TakeControlAsync();
-            }
-            else
-            {
-                StatusText = "Another client has control. Choose Take Control to preempt automation.";
-            }
+            return;
         }
-        catch (Exception exception)
-        {
-            StatusText = $"Unavailable: {exception.Message}";
-        }
+
+        _initialized = true;
+        await InitializeInputAsync();
+        _daemonSupervisor.Start();
     }
 
     public async ValueTask DisposeAsync()
@@ -194,18 +283,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
 
         _disposed = true;
-        _statusStop.Cancel();
-        if (_statusTask is not null)
-        {
-            try
-            {
-                await _statusTask;
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }
-        _statusStop.Dispose();
+        ClearControlAttention();
+        await _daemonSupervisor.DisposeAsync();
         if (_videoPresenter is not null)
         {
             await _videoPresenter.DisposeAsync();
@@ -218,16 +297,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             _forwarder = null;
             forwarder.SourcesChanged -= OnSourcesChanged;
             forwarder.StatusChanged -= OnForwardingStatusChanged;
+            forwarder.InputActivityDetected -= OnInputActivityDetected;
+            if (_control is { } control)
+            {
+                control.ConnectionStateChanged -= OnControlConnectionStateChanged;
+            }
             await forwarder.DisposeAsync();
+            _control = null;
         }
-
-        if (_control is not null)
+        else if (_control is not null)
         {
+            _control.ConnectionStateChanged -= OnControlConnectionStateChanged;
             await _control.DisposeAsync();
             _control = null;
         }
 
         await _session.DisposeAsync();
+        await _appearance.DisposeAsync();
     }
 
     public bool SetKey(PhysicalKey key, bool pressed)
@@ -264,7 +350,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         CanonicalDigitalControl control,
         bool pressed)
     {
-        if (_disposed || _forwarder is null || _control is null)
+        if (_disposed || _forwarder is null || !HasControl)
         {
             return;
         }
@@ -275,7 +361,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 control,
                 pressed,
                 CancellationToken.None);
-            StatusText = pressed ? $"{GetLabel(control)} held" : "Ready";
+            StatusText = pressed ? $"{ControllerControlLabels.For(control)} held" : "Ready";
         }
         catch (Exception exception)
         {
@@ -285,13 +371,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private async Task PulseControlAsync(CanonicalDigitalControl control)
     {
-        if (_control is null)
+        if (!HasControl)
         {
             StatusText = "Control is unavailable";
             return;
         }
 
-        StatusText = $"{GetLabel(control)} pressed";
+        StatusText = $"{ControllerControlLabels.For(control)} pressed";
         try
         {
             if (_forwarder is null)
@@ -326,67 +412,90 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         StatusText = "Taking control...";
         try
         {
-            _control = await _session.TakeControlAsync(
+            InputForwarder forwarder = _forwarder
+                ?? throw new InvalidOperationException("Local input is unavailable.");
+            IControlSession control = await _session.TakeControlAsync(
                 ControlPriority.InteractiveUser,
                 CancellationToken.None);
-            _forwarder = new(
-                _control,
-                new SdlGamepadManager(),
-                _configuration);
-            _forwarder.SourcesChanged += OnSourcesChanged;
-            _forwarder.StatusChanged += OnForwardingStatusChanged;
-            RefreshInputSources(activateSelection: false);
-            if (SelectedInputSource is { } source)
-            {
-                await _forwarder.SelectSourceAsync(source, CancellationToken.None);
-            }
-            await _forwarder.SetKeyboardFocusAsync(_keyboardFocused, CancellationToken.None);
-            StatusText = FormatConnectionState(_control.ConnectionState);
+            await forwarder.AttachControlAsync(control, CancellationToken.None);
+            _control = control;
+            control.ConnectionStateChanged += OnControlConnectionStateChanged;
+            await forwarder.SetKeyboardFocusAsync(_keyboardFocused, CancellationToken.None);
+            StatusText = ControlConnectionStatus.For(control.ConnectionState);
         }
         catch (Exception exception)
         {
-            StatusText = $"Could not take control: {exception.Message}";
-            if (_forwarder is not null)
+            string error = exception.Message;
+            if (_control is { } control)
             {
-                await _forwarder.DisposeAsync();
-                _forwarder = null;
+                control.ConnectionStateChanged -= OnControlConnectionStateChanged;
+                try
+                {
+                    await _forwarder!.DetachControlAsync(CancellationToken.None);
+                }
+                catch (Exception cleanupException)
+                {
+                    error = $"{error} Cleanup also failed: {cleanupException.Message}";
+                }
             }
-            if (_control is not null)
-            {
-                await _control.DisposeAsync();
-                _control = null;
-            }
+            _control = null;
+            StatusText = $"Could not take control: {error}";
         }
         finally
         {
-            OnPropertyChanged(nameof(HasControl));
-            OnPropertyChanged(nameof(ControlActionText));
+            NotifyControlStateChanged();
+            if (HasControl)
+            {
+                ClearControlAttention();
+            }
         }
     }
 
     private async Task ReleaseControlAsync()
     {
         StatusText = "Releasing control...";
-        if (_forwarder is not null)
+        if (_control is { } control)
         {
-            InputForwarder forwarder = _forwarder;
-            _forwarder = null;
-            forwarder.SourcesChanged -= OnSourcesChanged;
-            forwarder.StatusChanged -= OnForwardingStatusChanged;
-            await forwarder.DisposeAsync();
+            control.ConnectionStateChanged -= OnControlConnectionStateChanged;
         }
-        if (_control is not null)
+        try
         {
-            IControlSession control = _control;
+            if (_forwarder is not null)
+            {
+                await _forwarder.DetachControlAsync(CancellationToken.None);
+            }
+            StatusText = "Observing. Choose Take Control to send input.";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"Control released, but cleanup failed: {exception.Message}";
+        }
+        finally
+        {
             _control = null;
-            await control.DisposeAsync();
+            NotifyControlStateChanged();
         }
-        InputSources.Clear();
-        _selectedInputSource = null;
-        OnPropertyChanged(nameof(SelectedInputSource));
-        OnPropertyChanged(nameof(HasControl));
-        OnPropertyChanged(nameof(ControlActionText));
-        StatusText = "Observing. Choose Take Control to send input.";
+    }
+
+    private async Task InitializeInputAsync()
+    {
+        try
+        {
+            _forwarder = new(new SdlGamepadManager(), _configuration);
+            _forwarder.SourcesChanged += OnSourcesChanged;
+            _forwarder.StatusChanged += OnForwardingStatusChanged;
+            _forwarder.InputActivityDetected += OnInputActivityDetected;
+            RefreshInputSources(activateSelection: false);
+            if (SelectedInputSource is { } source)
+            {
+                await _forwarder.SelectSourceAsync(source, CancellationToken.None);
+            }
+            OnPropertyChanged(nameof(CanEditMapping));
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"Local input unavailable: {exception.Message}";
+        }
     }
 
     private async Task DeclineControlRequestAsync()
@@ -407,26 +516,87 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    private async Task MonitorStatusAsync(CancellationToken cancellationToken)
+    private async Task HandleDaemonConnectionEventAsync(
+        DaemonConnectionEvent connectionEvent,
+        CancellationToken cancellationToken)
     {
-        using PeriodicTimer timer = new(TimeSpan.FromMilliseconds(500));
-        while (await timer.WaitForNextTickAsync(cancellationToken))
+        switch (connectionEvent)
         {
-            try
-            {
-                ConsoleStatus status = await _session.GetStatusAsync(cancellationToken);
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                    ApplyPendingControlRequest(status.PendingControlRequest));
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-            catch
-            {
-                // Existing video and control reconnect paths report daemon availability.
-            }
+            case DaemonConnectionEvent.Attempting:
+                SetDaemonAvailability(DaemonAvailability.Connecting);
+                StatusText = "Connecting to daemon...";
+                break;
+            case DaemonConnectionEvent.Unavailable unavailable:
+                SetDaemonAvailability(DaemonAvailability.Unavailable);
+                StatusText = $"Unavailable: {unavailable.Error.Message}";
+                if (_videoPresenter is null)
+                {
+                    VideoHeadline = "Video unavailable";
+                    VideoStatusText = "Start the ConsoleControl daemon to restore video.";
+                }
+                break;
+            case DaemonConnectionEvent.RecoveredStatus recovered:
+                await RestoreDaemonStateAsync(recovered.Status, cancellationToken);
+                break;
+            case DaemonConnectionEvent.ObservedStatus observed:
+                ApplyPendingControlRequest(observed.Status.PendingControlRequest);
+                break;
         }
+    }
+
+    private Task RetryDaemonConnectionAsync()
+    {
+        if (!CanRetryDaemonConnection)
+        {
+            return Task.CompletedTask;
+        }
+
+        SetDaemonAvailability(DaemonAvailability.Connecting);
+        StatusText = "Connecting to daemon...";
+        _daemonSupervisor.RetryNow();
+        return Task.CompletedTask;
+    }
+
+    private async Task RestoreDaemonStateAsync(
+        ConsoleStatus status,
+        CancellationToken cancellationToken)
+    {
+        ControllerBridgeInventory bridges = await _session.GetControllerBridgeInventoryAsync(
+            cancellationToken);
+        VideoInventory video = await _session.GetVideoInventoryAsync(cancellationToken);
+        ApplyControllerBridgeInventory(bridges);
+        ApplyVideoInventory(video);
+        ApplyPendingControlRequest(status.PendingControlRequest);
+        await EnsureVideoPresenterAsync(video.LiveStreamUri);
+        SetDaemonAvailability(DaemonAvailability.Available);
+
+        if (!_initialControlDecisionPending)
+        {
+            return;
+        }
+
+        _initialControlDecisionPending = false;
+        if (_control is null && status.ControlOwner == ControlOwner.None)
+        {
+            await TakeControlAsync();
+        }
+        else if (_control is null)
+        {
+            StatusText = "Another client has control. Choose Take Control to preempt automation.";
+        }
+    }
+
+    private void SetDaemonAvailability(DaemonAvailability availability)
+    {
+        if (_daemonAvailability == availability)
+        {
+            return;
+        }
+
+        _daemonAvailability = availability;
+        OnPropertyChanged(nameof(SessionHeadline));
+        OnPropertyChanged(nameof(SessionDetailText));
+        OnPropertyChanged(nameof(CanRetryDaemonConnection));
     }
 
     private void ApplyPendingControlRequest(PendingControlRequest? request)
@@ -439,17 +609,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         OnPropertyChanged(nameof(HasPendingControlRequest));
         OnPropertyChanged(nameof(PendingControlRequestReason));
     }
-
-    private static string GetLabel(CanonicalDigitalControl control) => control switch
-    {
-        CanonicalDigitalControl.DPadUp => "D-pad up",
-        CanonicalDigitalControl.DPadRight => "D-pad right",
-        CanonicalDigitalControl.DPadDown => "D-pad down",
-        CanonicalDigitalControl.DPadLeft => "D-pad left",
-        CanonicalDigitalControl.LeftStickClick => "L3",
-        CanonicalDigitalControl.RightStickClick => "R3",
-        _ => control.ToString(),
-    };
 
     private async Task SelectInputSourceAsync(InputSourceOption source)
     {
@@ -485,23 +644,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         try
         {
             VideoInventory inventory = await _session.GetVideoInventoryAsync(CancellationToken.None);
-            _loadingVideoSources = true;
-            VideoSources.Clear();
-            foreach (VideoSource source in inventory.Sources)
-            {
-                VideoSources.Add(source);
-            }
-            _videoRevision = inventory.Revision;
-            _selectedVideoSource = VideoSources.FirstOrDefault(source =>
-                source.Id == inventory.SelectedSourceId);
-            OnPropertyChanged(nameof(SelectedVideoSource));
-            _loadingVideoSources = false;
-            VideoStatusText = inventory.Status;
-            await StartVideoPresenterAsync(inventory.LiveStreamUri);
+            ApplyVideoInventory(inventory);
+            await EnsureVideoPresenterAsync(inventory.LiveStreamUri);
         }
         catch (Exception exception)
         {
             _loadingVideoSources = false;
+            VideoHeadline = "Video unavailable";
             VideoStatusText = $"Video unavailable: {exception.Message}";
         }
     }
@@ -512,18 +661,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             ControllerBridgeInventory inventory = await _session.GetControllerBridgeInventoryAsync(
                 CancellationToken.None);
-            _loadingControllerBridges = true;
-            ControllerBridges.Clear();
-            foreach (ControllerBridge bridge in inventory.Bridges)
-            {
-                ControllerBridges.Add(bridge);
-            }
-            _controllerBridgeRevision = inventory.Revision;
-            _selectedControllerBridge = ControllerBridges.FirstOrDefault(bridge =>
-                bridge.Id == inventory.SelectedBridgeId);
-            OnPropertyChanged(nameof(SelectedControllerBridge));
-            _loadingControllerBridges = false;
-            StatusText = inventory.Status;
+            ApplyControllerBridgeInventory(inventory);
         }
         catch (Exception exception)
         {
@@ -559,17 +697,58 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 _videoRevision,
                 CancellationToken.None);
             _videoRevision = selection.Revision;
+            VideoHeadline = "Waiting for video";
             VideoStatusText = selection.Status;
         }
         catch (Exception exception)
         {
+            VideoHeadline = "Video source unavailable";
             VideoStatusText = $"Video selection failed: {exception.Message}";
             await InitializeVideoAsync();
         }
     }
 
-    private async Task StartVideoPresenterAsync(Uri streamUri)
+    private void ApplyControllerBridgeInventory(ControllerBridgeInventory inventory)
     {
+        _loadingControllerBridges = true;
+        ControllerBridges.Clear();
+        foreach (ControllerBridge bridge in inventory.Bridges)
+        {
+            ControllerBridges.Add(bridge);
+        }
+        _controllerBridgeRevision = inventory.Revision;
+        _selectedControllerBridge = ControllerBridges.FirstOrDefault(bridge =>
+            bridge.Id == inventory.SelectedBridgeId);
+        OnPropertyChanged(nameof(SelectedControllerBridge));
+        _loadingControllerBridges = false;
+        StatusText = inventory.Status;
+    }
+
+    private void ApplyVideoInventory(VideoInventory inventory)
+    {
+        _loadingVideoSources = true;
+        VideoSources.Clear();
+        foreach (VideoSource source in inventory.Sources)
+        {
+            VideoSources.Add(source);
+        }
+        _videoRevision = inventory.Revision;
+        _selectedVideoSource = VideoSources.FirstOrDefault(source =>
+            source.Id == inventory.SelectedSourceId);
+        OnPropertyChanged(nameof(SelectedVideoSource));
+        _loadingVideoSources = false;
+        VideoHeadline = _selectedVideoSource is null
+            ? "Choose a video source"
+            : "Waiting for video";
+        VideoStatusText = inventory.Status;
+    }
+
+    private async Task EnsureVideoPresenterAsync(Uri streamUri)
+    {
+        if (_videoPresenter is not null && _presentedVideoUri == streamUri)
+        {
+            return;
+        }
         if (_videoPresenter is not null)
         {
             await _videoPresenter.DisposeAsync();
@@ -583,18 +762,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     return;
                 }
                 VideoImage = bitmap;
+                VideoHeadline = "Video ready";
                 VideoStatusText = SelectedVideoSource is null
                     ? "Video ready"
                     : $"Video ready: {SelectedVideoSource.DisplayName}";
             }),
-            status => Dispatcher.UIThread.Post(() => VideoStatusText = status),
+            status => Dispatcher.UIThread.Post(() =>
+            {
+                VideoHeadline = "Reconnecting to video";
+                VideoStatusText = status;
+            }),
             () => Dispatcher.UIThread.Post(() =>
             {
                 if (!_disposed)
                 {
                     VideoImage = null;
+                    VideoHeadline = "Reconnecting to video";
                 }
             }));
+        _presentedVideoUri = streamUri;
         _videoPresenter.Start(streamUri);
     }
 
@@ -604,15 +790,65 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private void OnForwardingStatusChanged(object? sender, string status) =>
         Dispatcher.UIThread.Post(() => StatusText = status);
 
-    private static string FormatConnectionState(ControlConnectionState state) => state switch
+    private void OnInputActivityDetected(object? sender, EventArgs eventArgs) =>
+        Dispatcher.UIThread.Post(() => _ = ShowControlAttentionAsync());
+
+    private void OnControlConnectionStateChanged(
+        object? sender,
+        ControlConnectionState state) =>
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_disposed || !ReferenceEquals(_control, sender))
+            {
+                return;
+            }
+
+            NotifyControlStateChanged();
+            if (IsActiveControlState(state))
+            {
+                ClearControlAttention();
+            }
+        });
+
+    private void NotifyControlStateChanged()
     {
-        ControlConnectionState.Ready => "Ready",
-        ControlConnectionState.WaitingForBridge => "Controller bridge disconnected; reconnecting...",
-        ControlConnectionState.WaitingForControl => "Control is held by another client; waiting...",
-        ControlConnectionState.Reconnecting => "Daemon disconnected; reconnecting...",
-        ControlConnectionState.Stopped => "Controller forwarding stopped",
-        _ => "Connecting to daemon...",
-    };
+        OnPropertyChanged(nameof(HasControl));
+        OnPropertyChanged(nameof(HasControlSession));
+        OnPropertyChanged(nameof(SessionHeadline));
+    }
+
+    private async Task ShowControlAttentionAsync()
+    {
+        if (_disposed || HasControl || _daemonAvailability != DaemonAvailability.Available)
+        {
+            return;
+        }
+
+        long generation = Interlocked.Increment(ref _controlAttentionGeneration);
+        SetControlAttention(true);
+        await Task.Delay(TimeSpan.FromMilliseconds(700));
+        if (generation == Interlocked.Read(ref _controlAttentionGeneration))
+        {
+            SetControlAttention(false);
+        }
+    }
+
+    private void ClearControlAttention()
+    {
+        Interlocked.Increment(ref _controlAttentionGeneration);
+        SetControlAttention(false);
+    }
+
+    private void SetControlAttention(bool value)
+    {
+        if (_needsControlAttention == value)
+        {
+            return;
+        }
+
+        _needsControlAttention = value;
+        OnPropertyChanged(nameof(NeedsControlAttention));
+    }
 
     private void RefreshInputSources(bool activateSelection = true)
     {
@@ -625,6 +861,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         _selectedInputSource = ChooseInputSource(InputSources, current, _preferredInputProfile);
         OnPropertyChanged(nameof(SelectedInputSource));
+        OnPropertyChanged(nameof(CanEditMapping));
         if (activateSelection && _selectedInputSource is { } selected && selected != current)
         {
             _ = SelectInputSourceAsync(selected);
