@@ -27,6 +27,13 @@ if (args is ["automation"])
     return;
 }
 
+if (args is ["daemon-reconnect"])
+{
+    await DaemonConnectionSupervisorChecks.RunAsync();
+    Console.WriteLine("daemon connection supervisor: passed");
+    return;
+}
+
 if (args is ["screenshots"])
 {
     ScreenshotLibraryChecks.Run();
@@ -172,12 +179,14 @@ await StreamingTransportChecks.RunAsync();
 VideoRuntimeChecks.VerifyJpegDimensions();
 await VideoRuntimeChecks.RunAsync();
 await AutomationChecks.RunAsync();
-InputForwardingChecks.Run();
+await InputForwardingChecks.RunAsync();
+await DaemonConnectionSupervisorChecks.RunAsync();
 await AutomationControlChecks.RunAsync();
 DaemonOptionsChecks.Run();
 DaemonSessionLockChecks.Run();
 VerifyControllerStateBoundary();
 await PersistenceChecks.RunAsync();
+AppearanceChecks.Run();
 ScreenshotLibraryChecks.Run();
 await ControllerBridgeChecks.RunAsync();
 
@@ -225,9 +234,11 @@ Console.WriteLine("JPEG dimensions: passed");
 Console.WriteLine("automation timeline: passed");
 Console.WriteLine("interactive takeover: passed");
 Console.WriteLine("lossless input forwarding: passed");
+Console.WriteLine("daemon connection supervisor: passed");
 Console.WriteLine("automation ownership visibility: passed");
 Console.WriteLine("controller state boundary: passed");
 Console.WriteLine("configuration schema validation: passed");
+Console.WriteLine("Catppuccin appearance: passed");
 Console.WriteLine("exclusive daemon session: passed");
 
 static void VerifyControllerStateBoundary()

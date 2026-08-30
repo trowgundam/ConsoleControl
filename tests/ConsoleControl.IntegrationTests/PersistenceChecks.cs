@@ -23,6 +23,8 @@ internal static class PersistenceChecks
             "controller bridge selection");
 
         await VerifyGuiConfigurationAsync();
+        VerifyGuiSchemaOneMigration();
+        VerifyInvalidGuiAppearanceRejected();
         await VerifyLegacyGuiConfigurationMigrationAsync();
         await RequireUnknownSchemaRejectedAsync(
             path => Task.Run(() => new GuiConfigurationStore(path).Load()),
@@ -39,6 +41,8 @@ internal static class PersistenceChecks
             GuiConfiguration initial = first.Load();
             TestAssert.Require(initial.Profiles.IsEmpty && initial.LastInputSource is null,
                 "a missing GUI configuration did not produce defaults");
+            TestAssert.Require(initial.Appearance == AppearancePreference.Default,
+                "a missing GUI configuration did not use the desktop-aware Catppuccin default");
 
             InputProfile profile = DefaultInputProfiles.For(
                 new(InputSourceKind.Gamepad, "steam-controller-guid"));
@@ -48,6 +52,11 @@ internal static class PersistenceChecks
             second.Load();
             await second.RememberInputSourceAsync(profile.Key, CancellationToken.None);
             await first.RememberWindowAsync(new(1280, 720, true), CancellationToken.None);
+            _ = new GuiWindowState(840, 680, false).Validate();
+            AppearancePreference appearance = new(
+                CatppuccinFlavorSelection.Macchiato,
+                CatppuccinAccent.Mauve);
+            await second.RememberAppearanceAsync(appearance, CancellationToken.None);
 
             GuiConfiguration reloaded = new GuiConfigurationStore(path).Load();
             TestAssert.Require(reloaded.Profiles is [var reloadedProfile]
@@ -60,6 +69,8 @@ internal static class PersistenceChecks
                 "concurrent GUI preference writes lost the selected source");
             TestAssert.Require(reloaded.Window == new GuiWindowState(1280, 720, true),
                 "concurrent GUI preference writes lost the window state");
+            TestAssert.Require(reloaded.Appearance == appearance,
+                "concurrent GUI preference writes lost the appearance");
         }
         finally
         {
@@ -67,6 +78,64 @@ internal static class PersistenceChecks
             {
                 Directory.Delete(directory, recursive: true);
             }
+        }
+    }
+
+    private static void VerifyGuiSchemaOneMigration()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"consolecontrol-gui-v1-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, "gui-configuration.json");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "schemaVersion": 1,
+                  "revision": 4,
+                  "profiles": [],
+                  "lastInputSource": null,
+                  "window": { "width": 1000, "height": 900, "maximized": false }
+                }
+                """);
+            GuiConfiguration migrated = new GuiConfigurationStore(path).Load();
+            TestAssert.Require(migrated.Appearance == AppearancePreference.Default,
+                "schema 1 GUI configuration did not receive the Catppuccin default");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static void VerifyInvalidGuiAppearanceRejected()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"consolecontrol-gui-theme-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, "gui-configuration.json");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "schemaVersion": 2,
+                  "revision": 0,
+                  "profiles": [],
+                  "lastInputSource": null,
+                  "window": { "width": 1000, "height": 900, "maximized": false },
+                  "appearance": { "flavor": "Espresso", "accent": "Blue" }
+                }
+                """);
+            try
+            {
+                new GuiConfigurationStore(path).Load();
+                throw new InvalidOperationException("GUI configuration accepted an unknown color scheme");
+            }
+            catch (InvalidDataException)
+            {
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
         }
     }
 
@@ -113,7 +182,7 @@ internal static class PersistenceChecks
         string path = Path.Combine(Path.GetTempPath(), $"consolecontrol-schema-{Guid.NewGuid():N}.json");
         try
         {
-            await File.WriteAllTextAsync(path, """{"SchemaVersion":2,"Revision":0}""");
+            await File.WriteAllTextAsync(path, """{"SchemaVersion":3,"Revision":0}""");
             try
             {
                 await read(path);

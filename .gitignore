@@ -6,6 +6,9 @@
 # dotenv files
 .env
 
+# Local agent issue ledger
+/UNRELATED_ISSUES.md
+
 # User-specific files
 *.rsuser
 *.suo

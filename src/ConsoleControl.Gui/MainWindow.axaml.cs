@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -12,7 +13,8 @@ public sealed partial class MainWindow : Window
     private bool _allowClose;
     private double _normalWidth;
     private double _normalHeight;
-    private readonly Dictionary<IPointer, (Guid Id, CanonicalDigitalControl Control)> _pointerHolds = [];
+    private readonly Dictionary<IPointer, (Guid Id, CanonicalDigitalControl Control, Button Button)>
+        _pointerHolds = [];
 
     public MainWindow() : this(GuiWindowState.Default)
     {
@@ -37,26 +39,16 @@ public sealed partial class MainWindow : Window
                 _normalHeight = Bounds.Height;
             }
         };
-        foreach (Button button in this.GetLogicalDescendants()
-                     .OfType<Button>()
-                     .Where(button => button.Classes.Contains("controller")))
-        {
-            button.AddHandler(
-                PointerPressedEvent,
-                ControllerButton_PointerPressed,
-                RoutingStrategies.Bubble,
-                handledEventsToo: true);
-            button.AddHandler(
-                PointerReleasedEvent,
-                ControllerButton_PointerReleased,
-                RoutingStrategies.Bubble,
-                handledEventsToo: true);
-            button.AddHandler(
-                PointerCaptureLostEvent,
-                ControllerButton_PointerCaptureLost,
-                RoutingStrategies.Direct,
-                handledEventsToo: true);
-        }
+        AddHandler(
+            PointerPressedEvent,
+            ControllerButton_PointerPressed,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        AddHandler(
+            PointerReleasedEvent,
+            ControllerButton_PointerReleased,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
         Opened += async (_, _) =>
         {
             if (DataContext is MainWindowViewModel viewModel)
@@ -113,7 +105,8 @@ public sealed partial class MainWindow : Window
 
     private void ControllerButton_PointerPressed(object? sender, PointerPressedEventArgs eventArgs)
     {
-        if (sender is not Button { CommandParameter: CanonicalDigitalControl control } button ||
+        if (FindControllerButton(eventArgs.Source) is not
+            { CommandParameter: CanonicalDigitalControl control } button ||
             ViewModel is null ||
             _pointerHolds.ContainsKey(eventArgs.Pointer))
         {
@@ -121,8 +114,12 @@ public sealed partial class MainWindow : Window
         }
 
         Guid id = Guid.NewGuid();
-        _pointerHolds.Add(eventArgs.Pointer, (id, control));
-        button.Command = null;
+        _pointerHolds.Add(eventArgs.Pointer, (id, control, button));
+        button.AddHandler(
+            PointerCaptureLostEvent,
+            ControllerButton_PointerCaptureLost,
+            RoutingStrategies.Direct,
+            handledEventsToo: true);
         eventArgs.Pointer.Capture(button);
         eventArgs.Handled = true;
         _ = ViewModel.SetOnScreenControlAsync(id, control, pressed: true);
@@ -130,24 +127,37 @@ public sealed partial class MainWindow : Window
 
     private void ControllerButton_PointerReleased(object? sender, PointerReleasedEventArgs eventArgs)
     {
-        ReleasePointerHold(eventArgs.Pointer);
-        eventArgs.Handled = true;
+        eventArgs.Handled = ReleasePointerHold(eventArgs.Pointer);
     }
 
     private void ControllerButton_PointerCaptureLost(object? sender, PointerCaptureLostEventArgs eventArgs) =>
         ReleasePointerHold(eventArgs.Pointer);
 
-    private void ReleasePointerHold(IPointer pointer)
+    private bool ReleasePointerHold(IPointer pointer)
     {
-        if (!_pointerHolds.Remove(pointer, out (Guid Id, CanonicalDigitalControl Control) hold))
+        if (!_pointerHolds.Remove(
+                pointer,
+                out (Guid Id, CanonicalDigitalControl Control, Button Button) hold))
         {
-            return;
+            return false;
         }
+        hold.Button.RemoveHandler(PointerCaptureLostEvent, ControllerButton_PointerCaptureLost);
         pointer.Capture(null);
         if (ViewModel is { } viewModel)
         {
             _ = viewModel.SetOnScreenControlAsync(hold.Id, hold.Control, pressed: false);
         }
+        return true;
+    }
+
+    private static Button? FindControllerButton(object? source)
+    {
+        Button? button = source as Button;
+        if (button is null && source is StyledElement element)
+        {
+            button = element.FindLogicalAncestorOfType<Button>();
+        }
+        return button?.Classes.Contains("controller") == true ? button : null;
     }
 
     private async void OpenMapping_Click(object? sender, RoutedEventArgs eventArgs)
@@ -162,5 +172,21 @@ public sealed partial class MainWindow : Window
             DataContext = new MappingWindowViewModel(forwarder),
         };
         await window.ShowDialog<bool>(this);
+    }
+
+    private async void OpenSettings_Click(object? sender, RoutedEventArgs eventArgs)
+    {
+        if (ViewModel is null)
+        {
+            return;
+        }
+
+        SessionSettingsWindow window = new() { DataContext = ViewModel };
+        await window.ShowDialog(this);
+    }
+
+    private void CycleControllerLayout_Click(object? sender, RoutedEventArgs eventArgs)
+    {
+        ViewModel?.CycleOnScreenControllerLayout();
     }
 }

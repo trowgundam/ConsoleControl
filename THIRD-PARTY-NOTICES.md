@@ -10,6 +10,7 @@ Versions in this file match the `linux-x64` publish audited on 2026-08-28. Run a
 | --- | --- | --- | --- |
 | .NET and ASP.NET Core runtimes | 10.0.11 | MIT, with upstream third-party notices | `DotNetRuntime-LICENSE.txt` and generated runtime notice files |
 | Avalonia packages | 12.1.1 | MIT | `Avalonia-LICENSE.txt` |
+| Catppuccin palette data | 1.8.0 | MIT | `Catppuccin-LICENSE.txt` |
 | Google.Protobuf | 3.31.1 | BSD-3-Clause | `ProtocolBuffers-LICENSE.txt` |
 | gRPC for .NET packages | 2.83.0 | Apache-2.0 | `GrpcDotNet-LICENSE.txt` |
 | Tmds.DBus.Protocol | 0.94.1 and 0.95.0 | MIT | `Tmds.DBus-LICENSE.txt` |

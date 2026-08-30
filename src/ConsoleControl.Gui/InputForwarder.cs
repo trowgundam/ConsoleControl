@@ -31,47 +31,56 @@ public readonly record struct CapturedHostControl(
 
 internal sealed class InputForwarder : IAsyncDisposable
 {
-    private readonly IControlSession _control;
+    private static readonly TimeSpan ControllerWriteTimeout = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan ControllerDisposeTimeout = TimeSpan.FromSeconds(3);
     private readonly SdlGamepadManager _gamepads;
     private readonly GuiConfigurationStore _configurationStore;
     private readonly Channel<Func<Task>> _commands = Channel.CreateUnbounded<Func<Task>>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly CancellationTokenSource _stop = new();
     private readonly object _snapshotGate = new();
-    private readonly ControllerStateMailbox _mailbox = new();
     private readonly HashSet<HostControlId> _pressedKeys = [];
-    private readonly Dictionary<Guid, CanonicalDigitalControl> _overlays = [];
     private readonly Task _writer;
     private HostInputSnapshot _latestSnapshot = HostInputSnapshot.Empty;
     private ImmutableArray<InputProfile> _profiles;
     private InputSourceOption? _selected;
     private InputProfile? _profile;
-    private ControllerState _primary = ControllerState.Neutral;
-    private ControllerState _lastSent = ControllerState.Neutral;
+    private ControlAttachment? _attachment;
     private TaskCompletionSource<CapturedHostControl>? _capture;
     private HostInputSnapshot _captureBaseline = HostInputSnapshot.Empty;
     private bool _keyboardFocused;
+    private bool _mappedInputActive;
     private long _gamepadSelectionGeneration;
     private bool _disposed;
 
     public InputForwarder(
-        IControlSession control,
         SdlGamepadManager gamepads,
         GuiConfigurationStore configurationStore)
     {
-        _control = control;
         _gamepads = gamepads;
         _configurationStore = configurationStore;
         _profiles = configurationStore.Current.Profiles;
         _gamepads.DevicesChanged += OnDevicesChanged;
         _gamepads.SnapshotChanged += OnGamepadSnapshot;
         _gamepads.SelectedDeviceDisconnected += OnGamepadDisconnected;
-        _control.ConnectionStateChanged += OnConnectionStateChanged;
         _writer = Task.Run(RunWriterAsync);
+    }
+
+    private sealed class ControlAttachment(IControlSession session)
+    {
+        public IControlSession Session { get; } = session;
+        public ControllerStateMailbox Mailbox { get; } = new();
+        public Dictionary<Guid, CanonicalDigitalControl> Overlays { get; } = [];
+        public ControllerState Primary { get; set; } = ControllerState.Neutral;
+        public ControllerState? LastSent { get; set; }
+        public EventHandler<ControlConnectionState>? ConnectionHandler { get; set; }
+        public HashSet<HostControlId> SuppressedKeys { get; } = [];
+        public bool SuppressGamepadUntilNeutral { get; set; }
     }
 
     public event EventHandler? SourcesChanged;
     public event EventHandler<string>? StatusChanged;
+    public event EventHandler? InputActivityDetected;
 
     public IReadOnlyList<InputSourceOption> Sources
     {
@@ -90,13 +99,60 @@ internal sealed class InputForwarder : IAsyncDisposable
 
     public InputSourceOption? Selected => _selected;
     public InputProfile? ActiveProfile => _profile;
+    public bool HasAttachedControl => Volatile.Read(ref _attachment) is not null;
+
+    public async Task AttachControlAsync(
+        IControlSession control,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+        try
+        {
+            await EnqueueAndWaitAsync(async () =>
+            {
+                if (_attachment is not null)
+                {
+                    throw new InvalidOperationException("A control lease is already attached.");
+                }
+
+                ControlAttachment attachment = new(control);
+                attachment.ConnectionHandler = (_, state) => OnConnectionStateChanged(attachment, state);
+                control.ConnectionStateChanged += attachment.ConnectionHandler;
+                lock (_snapshotGate)
+                {
+                    PrepareAttachmentInputBoundary(attachment);
+                    _attachment = attachment;
+                }
+                try
+                {
+                    await SendComposedAsync(
+                        attachment,
+                        force: true,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    _attachment = null;
+                    control.ConnectionStateChanged -= attachment.ConnectionHandler;
+                    throw;
+                }
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await control.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    public Task DetachControlAsync(CancellationToken cancellationToken) =>
+        EnqueueAndWaitAsync(DetachControlCoreAsync, cancellationToken);
 
     public async Task SelectSourceAsync(InputSourceOption source, CancellationToken cancellationToken)
     {
         await EnqueueAndWaitAsync(async () =>
         {
-            _primary = ControllerState.Neutral;
-            await SendComposedAsync().ConfigureAwait(false);
+            await NeutralizeCurrentAttachmentAsync().ConfigureAwait(false);
             long selectionGeneration = await _gamepads.SelectAsync(
                 null,
                 CancellationToken.None).ConfigureAwait(false);
@@ -107,8 +163,14 @@ internal sealed class InputForwarder : IAsyncDisposable
                 _profile = FindProfile(source.ProfileKey);
                 _pressedKeys.Clear();
                 _latestSnapshot = HostInputSnapshot.Empty;
+                _mappedInputActive = false;
+                if (_attachment is { } attachment)
+                {
+                    attachment.SuppressedKeys.Clear();
+                    attachment.SuppressGamepadUntilNeutral = source.GamepadId is not null;
+                }
             }
-            _mailbox.Reset(ControllerState.Neutral);
+            Volatile.Read(ref _attachment)?.Mailbox.Reset(ControllerState.Neutral);
 
             if (source.GamepadId is not null)
             {
@@ -135,6 +197,19 @@ internal sealed class InputForwarder : IAsyncDisposable
             return true;
         }
 
+        bool hasAttachedControl = HasAttachedControl;
+        lock (_snapshotGate)
+        {
+            if (_attachment?.SuppressedKeys.Contains(id) == true)
+            {
+                if (!pressed)
+                {
+                    _attachment.SuppressedKeys.Remove(id);
+                }
+                return hasAttachedControl;
+            }
+        }
+
         if (!_keyboardFocused)
         {
             return false;
@@ -155,7 +230,7 @@ internal sealed class InputForwarder : IAsyncDisposable
         {
             QueueSnapshot(snapshot);
         }
-        return true;
+        return hasAttachedControl;
     }
 
     public Task SetKeyboardFocusAsync(bool focused, CancellationToken cancellationToken) =>
@@ -168,10 +243,9 @@ internal sealed class InputForwarder : IAsyncDisposable
                 {
                     _pressedKeys.Clear();
                     _latestSnapshot = HostInputSnapshot.Empty;
+                    _mappedInputActive = false;
                 }
-                _mailbox.Reset(ControllerState.Neutral);
-                _primary = ControllerState.Neutral;
-                await SendComposedAsync().ConfigureAwait(false);
+                await NeutralizeCurrentAttachmentAsync().ConfigureAwait(false);
             }
         }, cancellationToken);
 
@@ -190,13 +264,6 @@ internal sealed class InputForwarder : IAsyncDisposable
             _captureBaseline = _latestSnapshot;
         }
 
-        await EnqueueAndWaitAsync(async () =>
-        {
-            _mailbox.Reset(ControllerState.Neutral);
-            _primary = ControllerState.Neutral;
-            await SendComposedAsync().ConfigureAwait(false);
-        }, cancellationToken).ConfigureAwait(false);
-
         using CancellationTokenRegistration registration = cancellationToken.Register(() =>
         {
             lock (_snapshotGate)
@@ -208,7 +275,26 @@ internal sealed class InputForwarder : IAsyncDisposable
                 }
             }
         });
-        return await capture.Task.ConfigureAwait(false);
+
+        try
+        {
+            await EnqueueAndWaitAsync(async () =>
+            {
+                await NeutralizeCurrentAttachmentAsync().ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
+
+            return await capture.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_snapshotGate)
+            {
+                if (ReferenceEquals(_capture, capture))
+                {
+                    _capture = null;
+                }
+            }
+        }
     }
 
     public async Task PulseAsync(
@@ -217,10 +303,13 @@ internal sealed class InputForwarder : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         Guid id = Guid.NewGuid();
+        ControlAttachment? attachment = null;
         await EnqueueAndWaitAsync(async () =>
         {
-            _overlays.Add(id, control);
-            await SendComposedAsync().ConfigureAwait(false);
+            attachment = _attachment
+                ?? throw new InvalidOperationException("A control lease is required to send input.");
+            attachment.Overlays.Add(id, control);
+            await SendComposedAsync(attachment).ConfigureAwait(false);
         }, cancellationToken).ConfigureAwait(false);
         try
         {
@@ -230,8 +319,11 @@ internal sealed class InputForwarder : IAsyncDisposable
         {
             await EnqueueAndWaitAsync(async () =>
             {
-                _overlays.Remove(id);
-                await SendComposedAsync().ConfigureAwait(false);
+                if (attachment is not null && ReferenceEquals(_attachment, attachment))
+                {
+                    attachment.Overlays.Remove(id);
+                    await SendComposedAsync(attachment).ConfigureAwait(false);
+                }
             }, CancellationToken.None).ConfigureAwait(false);
         }
     }
@@ -242,15 +334,23 @@ internal sealed class InputForwarder : IAsyncDisposable
         bool pressed,
         CancellationToken cancellationToken) => EnqueueAndWaitAsync(async () =>
         {
+            ControlAttachment attachment = _attachment
+                ?? throw new InvalidOperationException("A control lease is required to send input.");
+            bool changed;
             if (pressed)
             {
-                _overlays[id] = control;
+                changed = !attachment.Overlays.TryGetValue(id, out CanonicalDigitalControl existing) ||
+                    existing != control;
+                attachment.Overlays[id] = control;
             }
             else
             {
-                _overlays.Remove(id);
+                changed = attachment.Overlays.Remove(id);
             }
-            await SendComposedAsync().ConfigureAwait(false);
+            if (changed)
+            {
+                await SendComposedAsync(attachment).ConfigureAwait(false);
+            }
         }, cancellationToken);
 
     public async Task SaveAndActivateProfileAsync(InputProfile profile, CancellationToken cancellationToken)
@@ -269,9 +369,18 @@ internal sealed class InputForwarder : IAsyncDisposable
                     snapshot = _latestSnapshot;
                 }
 
-                _primary = InputMapper.Map(profile, snapshot);
-                _mailbox.Reset(_primary);
-                await SendComposedAsync().ConfigureAwait(false);
+                if (_attachment is { } attachment)
+                {
+                    ControllerState mapped = InputMapper.Map(profile, snapshot);
+                    if (_selected?.GamepadId is not null)
+                    {
+                        (mapped, attachment.SuppressGamepadUntilNeutral) =
+                            ApplyGamepadLeaseBoundary(mapped, suppressUntilNeutral: true);
+                    }
+                    attachment.Primary = mapped;
+                    attachment.Mailbox.Reset(attachment.Primary);
+                    await SendComposedAsync(attachment).ConfigureAwait(false);
+                }
             }
         }, cancellationToken).ConfigureAwait(false);
     }
@@ -284,19 +393,12 @@ internal sealed class InputForwarder : IAsyncDisposable
         }
 
         _disposed = true;
-        await EnqueueAndWaitAsync(async () =>
-        {
-            _mailbox.Reset(ControllerState.Neutral);
-            _primary = ControllerState.Neutral;
-            _overlays.Clear();
-            await SendComposedAsync().ConfigureAwait(false);
-        }, CancellationToken.None).ConfigureAwait(false);
+        await EnqueueAndWaitAsync(DetachControlCoreAsync, CancellationToken.None).ConfigureAwait(false);
         _commands.Writer.Complete();
         await _writer.ConfigureAwait(false);
         _gamepads.DevicesChanged -= OnDevicesChanged;
         _gamepads.SnapshotChanged -= OnGamepadSnapshot;
         _gamepads.SelectedDeviceDisconnected -= OnGamepadDisconnected;
-        _control.ConnectionStateChanged -= OnConnectionStateChanged;
         await _gamepads.DisposeAsync().ConfigureAwait(false);
         _stop.Dispose();
     }
@@ -385,18 +487,20 @@ internal sealed class InputForwarder : IAsyncDisposable
                 lock (_snapshotGate)
                 {
                     _latestSnapshot = HostInputSnapshot.Empty;
+                    _mappedInputActive = false;
+                    if (_attachment is { } attachment)
+                    {
+                        attachment.SuppressGamepadUntilNeutral = true;
+                    }
                 }
-                _mailbox.Reset(ControllerState.Neutral);
-                _primary = ControllerState.Neutral;
-                _overlays.Clear();
-                await SendComposedAsync().ConfigureAwait(false);
+                await NeutralizeCurrentAttachmentAsync().ConfigureAwait(false);
                 StatusChanged?.Invoke(this, "Selected controller disconnected");
                 SourcesChanged?.Invoke(this, EventArgs.Empty);
             }, CancellationToken.None);
         }
     }
 
-    private void OnConnectionStateChanged(object? sender, ControlConnectionState state)
+    private void OnConnectionStateChanged(ControlAttachment expected, ControlConnectionState state)
     {
         if (_disposed)
         {
@@ -407,71 +511,236 @@ internal sealed class InputForwarder : IAsyncDisposable
         {
             _ = EnqueueAndWaitAsync(() =>
             {
+                if (!ReferenceEquals(_attachment, expected))
+                {
+                    return Task.CompletedTask;
+                }
                 lock (_snapshotGate)
                 {
-                    _pressedKeys.Clear();
-                    _latestSnapshot = HostInputSnapshot.Empty;
+                    PrepareAttachmentInputBoundary(expected);
                 }
-                _mailbox.Reset(ControllerState.Neutral);
-                _primary = ControllerState.Neutral;
-                _lastSent = ControllerState.Neutral;
-                _overlays.Clear();
+                expected.Mailbox.Reset(ControllerState.Neutral);
+                expected.Primary = ControllerState.Neutral;
+                expected.LastSent = null;
+                expected.Overlays.Clear();
                 return Task.CompletedTask;
             }, CancellationToken.None);
         }
 
-        StatusChanged?.Invoke(this, state switch
+        if (!ReferenceEquals(Volatile.Read(ref _attachment), expected))
         {
-            ControlConnectionState.Ready => "Ready",
-            ControlConnectionState.WaitingForBridge => "Controller bridge disconnected; reconnecting...",
-            ControlConnectionState.WaitingForControl => "Control is held by another client; waiting...",
-            ControlConnectionState.Reconnecting => "Daemon disconnected; reconnecting...",
-            ControlConnectionState.Stopped => "Controller forwarding stopped",
-            _ => "Connecting to daemon...",
-        });
+            return;
+        }
+        StatusChanged?.Invoke(this, ControlConnectionStatus.For(state));
     }
 
     private void QueueSnapshot(HostInputSnapshot snapshot)
     {
         ControllerState? mapped = null;
+        ControlAttachment? attachment = null;
+        bool activityStarted = false;
         lock (_snapshotGate)
         {
             _latestSnapshot = snapshot;
-            if (_profile is not null)
+            attachment = Volatile.Read(ref _attachment);
+            if (_capture is null && _profile is not null)
             {
                 mapped = InputMapper.Map(_profile, snapshot);
+                if (attachment is not null && _selected?.GamepadId is not null)
+                {
+                    (mapped, attachment.SuppressGamepadUntilNeutral) = ApplyGamepadLeaseBoundary(
+                        mapped.Value,
+                        attachment.SuppressGamepadUntilNeutral);
+                }
+                bool inputActive = mapped != ControllerState.Neutral;
+                activityStarted = inputActive && !_mappedInputActive;
+                _mappedInputActive = inputActive;
             }
         }
 
-        if (mapped is { } state && _mailbox.Publish(state))
+        if (activityStarted)
         {
-            _commands.Writer.TryWrite(DrainSnapshotsAsync);
+            InputActivityDetected?.Invoke(this, EventArgs.Empty);
+        }
+        if (mapped is { } state && attachment is not null && attachment.Mailbox.Publish(state))
+        {
+            _commands.Writer.TryWrite(() => DrainSnapshotsAsync(attachment));
         }
     }
 
-    private async Task DrainSnapshotsAsync()
+    internal static (ControllerState State, bool SuppressUntilNeutral) ApplyGamepadLeaseBoundary(
+        ControllerState mapped,
+        bool suppressUntilNeutral) => suppressUntilNeutral && mapped != ControllerState.Neutral
+            ? (ControllerState.Neutral, true)
+            : (mapped, false);
+
+    private async Task DrainSnapshotsAsync(ControlAttachment expected)
     {
-        while (_mailbox.TryTake(out ControllerState mapped))
+        while (ReferenceEquals(_attachment, expected) &&
+               expected.Mailbox.TryTake(out ControllerState mapped))
         {
-            if (mapped != _primary)
+            if (mapped != expected.Primary)
             {
-                _primary = mapped;
-                await SendComposedAsync().ConfigureAwait(false);
+                expected.Primary = mapped;
+                await SendComposedAsync(expected).ConfigureAwait(false);
             }
         }
     }
 
-    private async Task SendComposedAsync()
+    private async Task SendComposedAsync(
+        ControlAttachment expected,
+        bool force = false,
+        CancellationToken cancellationToken = default)
     {
+        if (!ReferenceEquals(_attachment, expected))
+        {
+            return;
+        }
         ControllerState state = ControllerStateComposer.AddDigitalControls(
-            _primary, _overlays.Values);
-        if (state == _lastSent)
+            expected.Primary, expected.Overlays.Values);
+        if (!force && state == expected.LastSent)
         {
             return;
         }
 
-        await _control.SetStateAsync(state, _stop.Token).ConfigureAwait(false);
-        _lastSent = state;
+        expected.LastSent = await TryWriteStateAsync(
+            expected.Session,
+            state,
+            cancellationToken).ConfigureAwait(false)
+            ? state
+            : null;
+    }
+
+    private async Task NeutralizeCurrentAttachmentAsync()
+    {
+        if (_attachment is not { } attachment)
+        {
+            return;
+        }
+
+        await NeutralizeAttachmentAsync(
+            attachment,
+            force: false,
+            _stop.Token).ConfigureAwait(false);
+    }
+
+    private async Task NeutralizeAttachmentAsync(
+        ControlAttachment attachment,
+        bool force,
+        CancellationToken cancellationToken)
+    {
+        attachment.Mailbox.Reset(ControllerState.Neutral);
+        attachment.Primary = ControllerState.Neutral;
+        attachment.Overlays.Clear();
+        if (!force &&
+            (!ReferenceEquals(_attachment, attachment) ||
+             attachment.LastSent == ControllerState.Neutral))
+        {
+            return;
+        }
+
+        attachment.LastSent = await TryWriteStateAsync(
+            attachment.Session,
+            ControllerState.Neutral,
+            cancellationToken).ConfigureAwait(false)
+            ? ControllerState.Neutral
+            : null;
+    }
+
+    private async Task<bool> TryWriteStateAsync(
+        IControlSession session,
+        ControllerState state,
+        CancellationToken cancellationToken)
+    {
+        if (session.ConnectionState != ControlConnectionState.Ready)
+        {
+            return false;
+        }
+
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(
+            _stop.Token,
+            cancellationToken);
+        timeout.CancelAfter(ControllerWriteTimeout);
+        try
+        {
+            Task write = session.SetStateAsync(state, timeout.Token);
+            return await CompletesWithinAsync(
+                write,
+                ControllerWriteTimeout,
+                timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            !cancellationToken.IsCancellationRequested && !_stop.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
+    private async Task DetachControlCoreAsync()
+    {
+        if (_attachment is not { } attachment)
+        {
+            return;
+        }
+
+        _attachment = null;
+        if (attachment.ConnectionHandler is not null)
+        {
+            attachment.Session.ConnectionStateChanged -= attachment.ConnectionHandler;
+        }
+        ClearTransientInput();
+        try
+        {
+            await NeutralizeAttachmentAsync(
+                attachment,
+                force: true,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            await CompletesWithinAsync(
+                attachment.Session.DisposeAsync().AsTask(),
+                ControllerDisposeTimeout).ConfigureAwait(false);
+        }
+    }
+
+    internal static async Task<bool> CompletesWithinAsync(
+        Task operation,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await operation.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+    }
+
+    private void ClearTransientInput()
+    {
+        lock (_snapshotGate)
+        {
+            _pressedKeys.Clear();
+            _latestSnapshot = HostInputSnapshot.Empty;
+            _mappedInputActive = false;
+        }
+    }
+
+    private void PrepareAttachmentInputBoundary(ControlAttachment attachment)
+    {
+        attachment.SuppressedKeys.Clear();
+        if (_selected?.ProfileKey.Kind == InputSourceKind.Keyboard)
+        {
+            attachment.SuppressedKeys.UnionWith(_pressedKeys);
+        }
+        attachment.SuppressGamepadUntilNeutral = _selected?.GamepadId is not null;
+        _pressedKeys.Clear();
+        _latestSnapshot = HostInputSnapshot.Empty;
+        _mappedInputActive = false;
     }
 
     private Task EnqueueAndWaitAsync(Func<Task> command, CancellationToken cancellationToken)

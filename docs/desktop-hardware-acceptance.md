@@ -37,3 +37,18 @@ The watched GUI session passed these checks against real hardware:
 - The rebuilt MCP contract advertised `left_stick_click` and `right_stick_click`. The Switch 2 tester recognized both as L3 and R3 on hardware.
 
 The controller-state packet still uses the eight-byte proof protocol. Sequence numbers and stale-packet rejection were not tested because they are deferred firmware work.
+
+## 2026-08-29 lease-independent mapping checkpoint
+
+The watched GUI session passed these checks against the same host, controller bridge, capture source, and Switch 2:
+
+- While a mapped D-pad direction remained held on the selected physical controller, clicking **Release Control** stopped Switch input immediately. Holding the physical input for another two seconds produced no further movement.
+- While a mapped Right Arrow key remained held, moving focus away from ConsoleControl stopped Switch input immediately. Releasing the key before returning focus produced no delayed or stuck movement.
+
+These checks confirm final neutralization after both control-lease release and keyboard focus loss for the lease-independent `InputForwarder` lifetime change.
+
+## 2026-08-29 focus-mode GUI checkpoint
+
+Watched host review covered the centered session pill and settings button, compact and full centered controller layouts, the single-row hidden layout, action-button sizing and text alignment, full-width hardware selectors, Catppuccin flavor and accent choices, and opening the mapping editor without a control lease.
+
+The final isolated Arch Linux KDE Plasma run covered all three controller layouts after the shared controller and dock-template refactors. Compact and full layouts rendered their common D-pad and face-button groups correctly. Their extracted input and action controls retained the expected sizing, the hidden layout reduced the bottom panel to one row, and the mapping editor used square D-pad buttons. The VM connected to an unused loopback port and sent no controller commands to the Switch.

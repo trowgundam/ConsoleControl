@@ -14,10 +14,11 @@ namespace ConsoleControl.Gui;
 public sealed class MappingWindowViewModel : INotifyPropertyChanged
 {
     private readonly InputForwarder _forwarder;
-    private readonly CancellationTokenSource _captureStop = new();
+    private readonly CancellationTokenSource _windowStop = new();
+    private CancellationTokenSource? _activeCaptureStop;
     private InputProfile _draft;
     private CanonicalDigitalControl _selectedTarget = CanonicalDigitalControl.A;
-    private string _statusText = "Click a Switch button, then press the host input to bind.";
+    private string _statusText = "Choose a console control, then press the host input to bind.";
 
     internal MappingWindowViewModel(InputForwarder forwarder)
     {
@@ -28,6 +29,7 @@ public sealed class MappingWindowViewModel : INotifyPropertyChanged
         CaptureStickCommand = new AsyncCommand<CanonicalStick>(CaptureStickAsync);
         RemoveBindingCommand = new AsyncCommand(RemoveBindingAsync);
         ResetCommand = new AsyncCommand(ResetAsync);
+        CancelCaptureCommand = new AsyncCommand(CancelActiveCaptureAsync);
         RefreshCurrentBindings();
     }
 
@@ -37,11 +39,14 @@ public sealed class MappingWindowViewModel : INotifyPropertyChanged
     public ICommand CaptureStickCommand { get; }
     public ICommand RemoveBindingCommand { get; }
     public ICommand ResetCommand { get; }
+    public ICommand CancelCaptureCommand { get; }
     public ObservableCollection<MappingBindingRow> CurrentBindings { get; } = [];
     public MappingBindingRow? SelectedBinding { get; set; }
     public string ProfileName => _draft.Name;
 
-    public string SelectedTargetLabel => Label(_selectedTarget);
+    public string SelectedTargetLabel => ControllerControlLabels.For(_selectedTarget);
+    public bool IsCapturing => _activeCaptureStop is not null;
+    public bool CanStartCapture => !IsCapturing;
 
     public string StatusText
     {
@@ -55,7 +60,11 @@ public sealed class MappingWindowViewModel : INotifyPropertyChanged
 
     public bool HandleKey(PhysicalKey key) => _forwarder.SetKey(key, true);
 
-    public void CancelCapture() => _captureStop.Cancel();
+    public void CancelCapture()
+    {
+        _windowStop.Cancel();
+        _activeCaptureStop?.Cancel();
+    }
 
     public async Task SaveAsync()
     {
@@ -73,13 +82,18 @@ public sealed class MappingWindowViewModel : INotifyPropertyChanged
 
     private async Task CaptureAsync(CanonicalDigitalControl target)
     {
+        if (!BeginCapture())
+        {
+            return;
+        }
         _selectedTarget = target;
         OnPropertyChanged(nameof(SelectedTargetLabel));
         RefreshCurrentBindings();
-        StatusText = $"Waiting for a host button for {Label(target)}…";
+        StatusText = $"Waiting for a host button for {ControllerControlLabels.For(target)}…";
         try
         {
-            CapturedHostControl captured = await _forwarder.CaptureNextInputAsync(_captureStop.Token);
+            CapturedHostControl captured = await _forwarder.CaptureNextInputAsync(
+                _activeCaptureStop!.Token);
             if (captured.Kind == CapturedHostControlKind.Axis &&
                 target is not CanonicalDigitalControl.LeftTrigger and not CanonicalDigitalControl.RightTrigger)
             {
@@ -88,7 +102,8 @@ public sealed class MappingWindowViewModel : INotifyPropertyChanged
             }
 
             AddBinding(captured, target);
-            StatusText = $"Bound {DisplayName(captured.Control)} to {Label(target)}";
+            StatusText =
+                $"Bound {DisplayName(captured.Control)} to {ControllerControlLabels.For(target)}";
         }
         catch (OperationCanceledException)
         {
@@ -98,14 +113,23 @@ public sealed class MappingWindowViewModel : INotifyPropertyChanged
         {
             StatusText = $"Capture failed: {exception.Message}";
         }
+        finally
+        {
+            EndCapture();
+        }
     }
 
     private async Task CaptureStickAsync(CanonicalStick target)
     {
+        if (!BeginCapture())
+        {
+            return;
+        }
         StatusText = $"Waiting for a host stick for {target} stick…";
         try
         {
-            CapturedHostControl captured = await _forwarder.CaptureNextInputAsync(_captureStop.Token);
+            CapturedHostControl captured = await _forwarder.CaptureNextInputAsync(
+                _activeCaptureStop!.Token);
             if (captured.Kind != CapturedHostControlKind.Axis ||
                 !SdlGamepadManager.TryGetStickPair(captured.Control, out HostControlId xAxis, out HostControlId yAxis))
             {
@@ -136,6 +160,36 @@ public sealed class MappingWindowViewModel : INotifyPropertyChanged
         {
             StatusText = $"Capture failed: {exception.Message}";
         }
+        finally
+        {
+            EndCapture();
+        }
+    }
+
+    private bool BeginCapture()
+    {
+        if (_activeCaptureStop is not null)
+        {
+            return false;
+        }
+        _activeCaptureStop = CancellationTokenSource.CreateLinkedTokenSource(_windowStop.Token);
+        OnPropertyChanged(nameof(IsCapturing));
+        OnPropertyChanged(nameof(CanStartCapture));
+        return true;
+    }
+
+    private void EndCapture()
+    {
+        _activeCaptureStop?.Dispose();
+        _activeCaptureStop = null;
+        OnPropertyChanged(nameof(IsCapturing));
+        OnPropertyChanged(nameof(CanStartCapture));
+    }
+
+    private Task CancelActiveCaptureAsync()
+    {
+        _activeCaptureStop?.Cancel();
+        return Task.CompletedTask;
     }
 
     private Task RemoveBindingAsync()
@@ -170,7 +224,7 @@ public sealed class MappingWindowViewModel : INotifyPropertyChanged
         }
         SelectedBinding = null;
         RefreshCurrentBindings();
-        StatusText = $"Removed binding from {Label(_selectedTarget)}";
+        StatusText = $"Removed binding from {ControllerControlLabels.For(_selectedTarget)}";
         return Task.CompletedTask;
     }
 
@@ -260,21 +314,6 @@ public sealed class MappingWindowViewModel : INotifyPropertyChanged
         int separator = control.Value.LastIndexOf('.');
         return separator >= 0 ? control.Value[(separator + 1)..] : control.Value;
     }
-
-    private static string Label(CanonicalDigitalControl control) => control switch
-    {
-        CanonicalDigitalControl.LeftShoulder => "L",
-        CanonicalDigitalControl.RightShoulder => "R",
-        CanonicalDigitalControl.LeftTrigger => "ZL",
-        CanonicalDigitalControl.RightTrigger => "ZR",
-        CanonicalDigitalControl.LeftStickClick => "L3",
-        CanonicalDigitalControl.RightStickClick => "R3",
-        CanonicalDigitalControl.DPadUp => "D-pad up",
-        CanonicalDigitalControl.DPadRight => "D-pad right",
-        CanonicalDigitalControl.DPadDown => "D-pad down",
-        CanonicalDigitalControl.DPadLeft => "D-pad left",
-        _ => control.ToString(),
-    };
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));

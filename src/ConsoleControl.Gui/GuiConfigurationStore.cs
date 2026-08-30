@@ -7,10 +7,10 @@ namespace ConsoleControl.Gui;
 
 internal readonly record struct GuiWindowState(double Width, double Height, bool Maximized)
 {
-    public static GuiWindowState Default { get; } = new(1000, 900, false);
+    public static GuiWindowState Default { get; } = new(1100, 760, false);
 
     public GuiWindowState Validate() => double.IsFinite(Width) && double.IsFinite(Height) &&
-                                        Width >= 760 && Height >= 700
+                                        Width >= 760 && Height >= 680
         ? this
         : throw new InvalidDataException("Saved window dimensions are invalid.");
 }
@@ -18,7 +18,8 @@ internal readonly record struct GuiWindowState(double Width, double Height, bool
 internal sealed record GuiConfiguration(
     ImmutableArray<InputProfile> Profiles,
     InputProfileKey? LastInputSource,
-    GuiWindowState Window);
+    GuiWindowState Window,
+    AppearancePreference Appearance);
 
 internal sealed class GuiConfigurationStore
 {
@@ -30,7 +31,11 @@ internal sealed class GuiConfigurationStore
     private readonly string _lockPath;
     private readonly string _legacyProfilesPath;
     private readonly string _legacyPreferencesPath;
-    private GuiConfiguration _current = new([], null, GuiWindowState.Default);
+    private GuiConfiguration _current = new(
+        [],
+        null,
+        GuiWindowState.Default,
+        AppearancePreference.Default);
 
     public GuiConfigurationStore(string? path = null)
     {
@@ -95,6 +100,17 @@ internal sealed class GuiConfigurationStore
         CancellationToken cancellationToken) =>
         MutateAsync(stored => stored with { Window = window.Validate() }, cancellationToken);
 
+    public Task<GuiConfiguration> RememberAppearanceAsync(
+        AppearancePreference appearance,
+        CancellationToken cancellationToken)
+    {
+        appearance.Validate();
+        return MutateAsync(stored => stored with
+        {
+            Appearance = ToStored(appearance),
+        }, cancellationToken);
+    }
+
     private async Task<GuiConfiguration> MutateAsync(
         Func<StoredConfiguration, StoredConfiguration> mutation,
         CancellationToken cancellationToken)
@@ -135,13 +151,20 @@ internal sealed class GuiConfigurationStore
                 ? new(source.Kind, source.HardwareId)
                 : null;
         }
-        return Validate(new(1, 0, profiles, lastInputSource, GuiWindowState.Default));
+        return Validate(new(
+            2,
+            0,
+            profiles,
+            lastInputSource,
+            GuiWindowState.Default,
+            ToStored(AppearancePreference.Default)));
     }
 
     private static GuiConfiguration ToDomain(StoredConfiguration stored) => new(
         stored.Profiles,
         stored.LastInputSource,
-        stored.Window);
+        stored.Window,
+        ToDomain(stored.Appearance!));
 
     private static StoredConfiguration ReadStored(string path)
     {
@@ -152,7 +175,18 @@ internal sealed class GuiConfigurationStore
 
     private static StoredConfiguration Validate(StoredConfiguration stored)
     {
-        if (stored.SchemaVersion != 1)
+        stored = stored.SchemaVersion switch
+        {
+            1 => stored with
+            {
+                SchemaVersion = 2,
+                Appearance = ToStored(AppearancePreference.Default),
+            },
+            2 when stored.Appearance is not null => stored,
+            2 => throw new InvalidDataException("The GUI configuration has no appearance preference."),
+            _ => throw new InvalidDataException("The GUI configuration uses an unsupported schema."),
+        };
+        if (stored.SchemaVersion != 2)
         {
             throw new InvalidDataException("The GUI configuration uses an unsupported schema.");
         }
@@ -174,7 +208,22 @@ internal sealed class GuiConfigurationStore
             throw new InvalidDataException("The GUI configuration has an invalid input source preference.");
         }
         stored.Window.Validate();
+        ToDomain(stored.Appearance!);
         return stored;
+    }
+
+    private static StoredAppearance ToStored(AppearancePreference appearance) => new(
+        appearance.Flavor.ToString(),
+        appearance.Accent.ToString());
+
+    private static AppearancePreference ToDomain(StoredAppearance appearance)
+    {
+        if (!Enum.TryParse(appearance.Flavor, ignoreCase: false, out CatppuccinFlavorSelection flavor) ||
+            !Enum.TryParse(appearance.Accent, ignoreCase: false, out CatppuccinAccent accent))
+        {
+            throw new InvalidDataException("The GUI configuration has an invalid appearance preference.");
+        }
+        return new AppearancePreference(flavor, accent).Validate();
     }
 
     private void WriteStored(StoredConfiguration stored)
@@ -238,7 +287,9 @@ internal sealed class GuiConfigurationStore
         ulong Revision,
         ImmutableArray<InputProfile> Profiles,
         InputProfileKey? LastInputSource,
-        GuiWindowState Window);
+        GuiWindowState Window,
+        StoredAppearance? Appearance);
+    private sealed record StoredAppearance(string Flavor, string Accent);
     private sealed record LegacyInputConfiguration(ulong Revision, ImmutableArray<InputProfile> Profiles);
     private sealed record LegacyPreferences(int SchemaVersion, LegacyInputSource? LastInputSource);
     private sealed record LegacyInputSource(InputSourceKind Kind, string HardwareId);
